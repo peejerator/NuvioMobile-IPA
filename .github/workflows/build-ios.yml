@@ -142,6 +142,16 @@ jobs:
             echo "Version.xcconfig not found."
           fi
 
+      - name: Create local.properties
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+
+          touch local.properties
+
+          echo "Created:"
+          ls -l local.properties
+
       - name: Configure Gradle memory for GitHub runner
         working-directory: upstream
         run: |
@@ -224,7 +234,7 @@ jobs:
             echo "=================================================="
             echo
 
-            echo "Searching build log for Gradle/Kotlin errors..."
+            echo "Relevant errors:"
             echo
 
             grep -n -E \
@@ -400,9 +410,9 @@ jobs:
           Built automatically from the official
           NuvioMedia/NuvioMobile ${NUVIO_TAG} source code.
 
-          The application source code is unchanged. The CI workflow lowers
-          Nuvio's Gradle/Kotlin JVM memory limits so the project can build
-          on a standard GitHub Actions macOS runner.
+          The application source code is unchanged. The CI workflow creates
+          the local.properties file expected by Nuvio's Gradle build and
+          lowers Gradle/Kotlin JVM memory limits for GitHub Actions.
 
           The IPA is unsigned and intended for sideloading with tools such
           as SideStore or Sideloadly.
