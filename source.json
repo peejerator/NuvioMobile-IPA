@@ -1,0 +1,32 @@
+{
+  "name": "Nuvio iOS (Unofficial)",
+  "subtitle": "Automatic iOS builds of Nuvio",
+  "description": "Unofficial SideStore source containing iOS builds created automatically from official Nuvio releases.",
+  "website": "https://github.com/peejerator/NuvioMobile-IPA",
+  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.0/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+  "tintColor": "7B2FF7",
+  "news": [],
+  "apps": [
+    {
+      "name": "Nuvio",
+      "bundleIdentifier": "com.nuvio.media",
+      "developerName": "Nuvio",
+      "subtitle": "Watch your library, anywhere",
+      "localizedDescription": "Unofficial iOS build generated automatically from the official NuvioMobile source code.",
+      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.0/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+      "tintColor": "7B2FF7",
+      "category": "entertainment",
+      "versions": [
+        {
+          "version": "0.4.0",
+          "buildVersion": "102",
+          "date": "2026-08-01T08:47:50Z",
+          "localizedDescription": "Introducing SIMKL as a new native tracking provider @tapframe @skoruppa  \r\nad1b8b79 fix: handle torrent cache pressure on Android @tapframe  \r\nebbc9709 Take videoid from meta for track services in progress items @skoruppa  \r\nd92b4d4c fix(search): remove recent history icons @tapframe  \r\nabbfb62b Add badges to TmdbEntityBrowser @skoruppa  \r\n2de02d53 Add Slovak language strings for settings and features @mmsw91  \r\nc53b2173 Update Slovak translations for parental content strings @mmsw91    \r\n0e1e12a8 Fix \"mark as unwatched\" for whole series @skoruppa  \r\nd55ed7ae fix(auth): sanitize authentication errors @tapframe  \r\n2bca3ffa fix(profiles): activate selected profile once @tapframe  \r\n2f19d06f fix(trakt): restore seek scrobble updates @tapframe  ",
+          "downloadURL": "https://github.com/peejerator/NuvioMobile-IPA/releases/download/0.4.0/Nuvio-0.4.0.ipa",
+          "size": 40979687,
+          "minOSVersion": "16.1"
+        }
+      ]
+    }
+  ]
+}
