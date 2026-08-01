@@ -77,11 +77,11 @@ jobs:
 
     if: needs.check-release.outputs.should_build == 'true'
 
-    # Intel macOS runner:
-    # 4 CPUs / 14 GB RAM
+    # Intel GitHub-hosted macOS runner:
+    # 4 vCPU / 14 GB RAM.
     #
-    # This gives Kotlin/Native substantially more memory than the
-    # 7 GB ARM64 macos-15 runner.
+    # Nuvio's Kotlin/Native release linker requires substantially more
+    # heap than the 7 GB ARM runner can comfortably provide.
     runs-on: macos-15-intel
 
     env:
@@ -165,7 +165,7 @@ jobs:
           echo "Created:"
           ls -l local.properties
 
-      - name: Configure Gradle memory for GitHub runner
+      - name: Configure Gradle for GitHub runner
         working-directory: upstream
         run: |
           set -euo pipefail
@@ -174,35 +174,38 @@ jobs:
           cat gradle.properties
 
           echo
-          echo "Configuring JVM memory for the 14 GB runner..."
+          echo "Configuring Gradle/Kotlin memory..."
 
-          # Gradle itself does not need much memory for this build.
-          # Save as much RAM as possible for the Kotlin/Native linker.
+          # The Kotlin/Native linker executes in the Gradle daemon for this
+          # project. It previously OOMed with a 2 GiB Gradle heap.
+          #
+          # The Intel macOS runner has 14 GB of physical RAM, so give Gradle
+          # a 10 GB maximum heap while leaving several GB for Xcode/macOS.
           sed -i '' \
-            's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx2048M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768m/' \
+            's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx10240M -Xms1024M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=1024m/' \
             gradle.properties
 
-          # Keep the Kotlin JVM daemon small.
+          # Keep a reasonable Kotlin daemon limit. Native release linking
+          # is handled through the Gradle daemon in this build.
           sed -i '' \
-            's/^kotlin\.daemon\.jvmargs=.*/kotlin.daemon.jvmargs=-Xmx1024M/' \
+            's/^kotlin\.daemon\.jvmargs=.*/kotlin.daemon.jvmargs=-Xmx2048M/' \
             gradle.properties
 
-          # Kotlin/Native release linking is the memory-intensive portion.
-          # Previous 3 GB setting failed with Java heap space.
+          # Retain a high Kotlin/Native JVM limit in case any compiler
+          # subprocess honors this independently.
           sed -i '' \
-            's/^kotlin\.native\.jvmArgs=.*/kotlin.native.jvmArgs=-Xmx8192M/' \
+            's/^kotlin\.native\.jvmArgs=.*/kotlin.native.jvmArgs=-Xmx10240M/' \
             gradle.properties
 
-          # Limit simultaneous Gradle workers to reduce peak RAM usage.
+          # Keep peak parallel memory usage under control.
           if grep -q '^org\.gradle\.workers\.max=' gradle.properties; then
             sed -i '' \
-              's/^org\.gradle\.workers\.max=.*/org.gradle.workers.max=2/' \
+              's/^org\.gradle\.workers\.max=.*/org.gradle.workers.max=1/' \
               gradle.properties
           else
-            echo 'org.gradle.workers.max=2' >> gradle.properties
+            echo 'org.gradle.workers.max=1' >> gradle.properties
           fi
 
-          # Avoid parallel project execution competing with the native linker.
           if grep -q '^org\.gradle\.parallel=' gradle.properties; then
             sed -i '' \
               's/^org\.gradle\.parallel=.*/org.gradle.parallel=false/' \
@@ -212,7 +215,7 @@ jobs:
           fi
 
           echo
-          echo "GitHub Actions Gradle settings:"
+          echo "Final Gradle settings:"
           cat gradle.properties
 
       - name: Make Gradle wrapper executable
@@ -228,14 +231,31 @@ jobs:
 
           ./gradlew --version
 
+      - name: Stop existing Gradle daemons
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+
+          # Make sure no daemon launched before we changed gradle.properties
+          # survives with an old heap configuration.
+          ./gradlew --stop || true
+
+      - name: Confirm effective Gradle memory settings
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+
+          echo "Memory-related gradle.properties entries:"
+          grep -E \
+            '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|kotlin\.native\.jvmArgs|org\.gradle\.workers\.max|org\.gradle\.parallel)=' \
+            gradle.properties || true
+
+          echo
+          echo "Expected Gradle max heap:"
+          echo "10 GiB"
+
       - name: Build unsigned iOS app
         working-directory: upstream
-        env:
-          GRADLE_OPTS: >-
-            -Xmx2048M
-            -Dfile.encoding=UTF-8
-            -XX:MaxMetaspaceSize=768m
-          KOTLIN_DAEMON_JVMARGS: "-Xmx1024M"
         run: |
           set -o pipefail
 
@@ -245,12 +265,18 @@ jobs:
           echo
           echo "Runner architecture:"
           uname -m
+
           echo
           echo "Memory before build:"
           vm_stat || true
+
           echo
           echo "Full build log:"
           echo "$BUILD_LOG"
+
+          echo
+          echo "IMPORTANT:"
+          echo "The Gradle daemon should report a maximum heap near 10 GiB."
           echo
 
           xcodebuild \
@@ -274,8 +300,8 @@ jobs:
             echo "=================================================="
             echo "BUILD FAILED"
             echo "=================================================="
-            echo
 
+            echo
             echo "Memory after failure:"
             vm_stat || true
 
@@ -286,17 +312,17 @@ jobs:
             echo
 
             grep -n -E \
-              "FAILURE:|What went wrong|Execution failed|Exception|OutOfMemory|heap space|Could not reserve|Could not create|Compilation failed|error:|ERROR|e: " \
+              "FAILURE:|What went wrong|Execution failed|Exception|OutOfMemory|heap space|currently configured max heap|Could not reserve|Could not create|Compilation failed|error:|ERROR|e: " \
               "$BUILD_LOG" \
-              | tail -250 || true
+              | tail -300 || true
 
             echo
             echo "=================================================="
-            echo "Last 300 lines of complete build log"
+            echo "Last 400 lines of complete build log"
             echo "=================================================="
             echo
 
-            tail -300 "$BUILD_LOG" || true
+            tail -400 "$BUILD_LOG" || true
 
             exit "$BUILD_STATUS"
           fi
@@ -458,9 +484,9 @@ jobs:
           Built automatically from the official
           NuvioMedia/NuvioMobile ${NUVIO_TAG} source code.
 
-          The application source code is unchanged. The CI workflow creates
-          the local.properties file expected by Nuvio's Gradle build and
-          adjusts Gradle/Kotlin JVM memory settings for GitHub Actions.
+          The application source code is unchanged. The CI environment
+          creates local.properties and adjusts Gradle/Kotlin memory limits
+          so the Kotlin/Native release linker can run on GitHub Actions.
 
           The IPA is unsigned and intended for sideloading with tools such
           as SideStore or Sideloadly.
