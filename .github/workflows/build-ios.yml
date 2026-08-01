@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Upstream Nuvio tag to build. Leave blank for latest release."
+        description: "Upstream Nuvio tag. Leave blank for latest release."
         required: false
         type: string
 
@@ -77,7 +77,6 @@ jobs:
 
     if: needs.check-release.outputs.should_build == 'true'
 
-    # Newer macOS/Xcode SDK + 14 GB RAM.
     runs-on: macos-26-intel
 
     env:
@@ -104,16 +103,8 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
 
           echo
-          echo "SDK path:"
-          xcrun --sdk iphoneos --show-sdk-path
-
-          echo
           echo "Physical memory:"
           sysctl hw.memsize || true
-
-          echo
-          echo "Hardware:"
-          system_profiler SPHardwareDataType || true
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -169,8 +160,7 @@ jobs:
       - name: Cache Kotlin Native
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.konan
+          path: ~/.konan
           key: konan-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}
           restore-keys: |
             konan-${{ runner.os }}-${{ runner.arch }}-
@@ -182,21 +172,10 @@ jobs:
 
           touch local.properties
 
-          echo "Created:"
-          ls -l local.properties
-
       - name: Configure Gradle for GitHub runner
         working-directory: upstream
         run: |
           set -euo pipefail
-
-          echo "Original memory settings:"
-          grep -E \
-            '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|kotlin\.native\.jvmArgs|org\.gradle\.workers\.max|org\.gradle\.parallel)=' \
-            gradle.properties || true
-
-          echo
-          echo "Configuring memory..."
 
           sed -i '' \
             's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx10240M -Xms1024M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=1024m/' \
@@ -226,8 +205,8 @@ jobs:
             echo 'org.gradle.parallel=false' >> gradle.properties
           fi
 
-          echo
           echo "Final memory settings:"
+
           grep -E \
             '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|kotlin\.native\.jvmArgs|org\.gradle\.workers\.max|org\.gradle\.parallel)=' \
             gradle.properties || true
@@ -259,30 +238,12 @@ jobs:
 
           BUILD_LOG="$RUNNER_TEMP/xcodebuild.log"
 
-          echo "=================================================="
-          echo "Build configuration"
-          echo "=================================================="
-
-          echo "Nuvio tag: $NUVIO_TAG"
-
+          echo "Building Nuvio $NUVIO_TAG..."
           echo
-          echo "Xcode:"
+
           xcodebuild -version
-
-          echo
-          echo "iPhoneOS SDK:"
           xcrun --sdk iphoneos --show-sdk-version
 
-          echo
-          echo "Architecture:"
-          uname -m
-
-          echo
-          echo "Memory:"
-          sysctl hw.memsize || true
-
-          echo
-          echo "Starting Xcode build..."
           echo
 
           xcodebuild \
@@ -306,19 +267,10 @@ jobs:
             echo "=================================================="
             echo "BUILD FAILED"
             echo "=================================================="
-
-            echo
-            echo "Memory after failure:"
-            vm_stat || true
-
-            echo
-            echo "=================================================="
-            echo "Relevant errors"
-            echo "=================================================="
             echo
 
             grep -n -E \
-              "FAILURE:|What went wrong|Execution failed|Exception|OutOfMemory|heap space|currently configured max heap|Compilation failed|error:|ERROR|e: " \
+              "FAILURE:|What went wrong|Execution failed|Exception|OutOfMemory|heap space|Compilation failed|error:|ERROR|e: " \
               "$BUILD_LOG" \
               | tail -300 || true
 
@@ -326,14 +278,13 @@ jobs:
             echo "=================================================="
             echo "Last 400 lines"
             echo "=================================================="
-            echo
 
             tail -400 "$BUILD_LOG" || true
 
             exit "$BUILD_STATUS"
           fi
 
-      - name: Stop Gradle daemon after build
+      - name: Stop Gradle daemon
         if: always()
         working-directory: upstream
         run: |
@@ -343,8 +294,6 @@ jobs:
         id: app
         run: |
           set -euo pipefail
-
-          echo "Looking for Nuvio.app..."
 
           APP_PATH="$(find \
             "$RUNNER_TEMP/nuvio-derived/Build/Products/Release-iphoneos" \
@@ -356,21 +305,10 @@ jobs:
 
           if [ -z "$APP_PATH" ]; then
             echo "Nuvio.app was not found."
-
-            if [ -d "$RUNNER_TEMP/nuvio-derived/Build/Products" ]; then
-              echo
-              echo "Build products:"
-
-              find \
-                "$RUNNER_TEMP/nuvio-derived/Build/Products" \
-                -maxdepth 3 \
-                -print
-            fi
-
             exit 1
           fi
 
-          echo "Found app:"
+          echo "Found:"
           echo "$APP_PATH"
 
           echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
@@ -387,54 +325,20 @@ jobs:
             -c "Print :CFBundleIdentifier" \
             "$PLIST"
 
-          echo
           echo "Version:"
           /usr/libexec/PlistBuddy \
             -c "Print :CFBundleShortVersionString" \
             "$PLIST"
 
-          echo
           echo "Build:"
           /usr/libexec/PlistBuddy \
             -c "Print :CFBundleVersion" \
             "$PLIST"
 
-          echo
           echo "Minimum iOS:"
           /usr/libexec/PlistBuddy \
             -c "Print :MinimumOSVersion" \
             "$PLIST" || true
-
-      - name: Show embedded frameworks and extensions
-        run: |
-          set -euo pipefail
-
-          APP="${{ steps.app.outputs.app_path }}"
-
-          echo "Frameworks:"
-
-          if [ -d "$APP/Frameworks" ]; then
-            find \
-              "$APP/Frameworks" \
-              -maxdepth 2 \
-              -type d \
-              -print
-          else
-            echo "No Frameworks directory found."
-          fi
-
-          echo
-          echo "Extensions:"
-
-          if [ -d "$APP/PlugIns" ]; then
-            find \
-              "$APP/PlugIns" \
-              -maxdepth 2 \
-              -type d \
-              -print
-          else
-            echo "No PlugIns directory found."
-          fi
 
       - name: Package IPA
         id: package
@@ -445,7 +349,6 @@ jobs:
           PACKAGE_DIR="$RUNNER_TEMP/nuvio-package"
 
           rm -rf "$PACKAGE_DIR"
-
           mkdir -p "$PACKAGE_DIR/Payload"
 
           cp -R \
@@ -461,7 +364,6 @@ jobs:
             "$IPA" \
             Payload
 
-          echo
           echo "Created IPA:"
           ls -lh "$IPA"
 
@@ -473,16 +375,10 @@ jobs:
 
           IPA="${{ steps.package.outputs.ipa }}"
 
-          echo "Testing ZIP integrity..."
           unzip -t "$IPA"
 
           echo
-          echo "IPA:"
           ls -lh "$IPA"
-
-          echo
-          echo "IPA contents:"
-          unzip -l "$IPA" | head -100
 
       - name: Create GitHub release
         env:
@@ -505,9 +401,6 @@ jobs:
 
           No application source-code modifications are included.
 
-          The CI environment creates the local.properties file required by
-          the Gradle build and adjusts build memory limits for GitHub Actions.
-
           The IPA is unsigned and intended for sideloading with tools such
           as SideStore or Sideloadly.
           EOF
@@ -527,3 +420,307 @@ jobs:
               --title "Nuvio ${NUVIO_TAG} iOS" \
               --notes "$NOTES"
           fi
+
+  update-source:
+    name: Update SideStore source
+
+    needs:
+      - check-release
+      - build
+
+    # Run when:
+    # 1. check-release succeeded, AND
+    # 2. the build either succeeded OR was skipped because the IPA
+    #    already exists.
+    #
+    # This means your existing 0.4.0 release can be added to source.json
+    # without rebuilding it.
+    if: >-
+      always() &&
+      needs.check-release.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+
+    runs-on: ubuntu-latest
+
+    env:
+      NUVIO_TAG: ${{ needs.check-release.outputs.tag }}
+
+    steps:
+      - name: Checkout builder repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download IPA from this repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p downloaded
+
+          gh release download "$NUVIO_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "*.ipa" \
+            --dir downloaded
+
+          echo "Downloaded:"
+          ls -lh downloaded
+
+          IPA="$(find downloaded -maxdepth 1 -type f -name '*.ipa' -print -quit)"
+
+          if [ -z "$IPA" ]; then
+            echo "No IPA found in release $NUVIO_TAG"
+            exit 1
+          fi
+
+          echo "IPA_PATH=$IPA" >> "$GITHUB_ENV"
+
+      - name: Extract IPA metadata
+        id: metadata
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import os
+          import plistlib
+          import zipfile
+
+          ipa = os.environ["IPA_PATH"]
+
+          with zipfile.ZipFile(ipa, "r") as z:
+              plist_paths = [
+                  name
+                  for name in z.namelist()
+                  if name.startswith("Payload/")
+                  and name.count("/") == 2
+                  and name.endswith(".app/Info.plist")
+              ]
+
+              if not plist_paths:
+                  raise RuntimeError("Could not find app Info.plist in IPA")
+
+              plist_path = plist_paths[0]
+              info = plistlib.loads(z.read(plist_path))
+
+          bundle_id = info["CFBundleIdentifier"]
+          version = info["CFBundleShortVersionString"]
+          build = info["CFBundleVersion"]
+          min_os = info.get("MinimumOSVersion", "16.1")
+
+          size = os.path.getsize(ipa)
+
+          output = os.environ["GITHUB_OUTPUT"]
+
+          with open(output, "a") as f:
+              f.write(f"bundle_id={bundle_id}\n")
+              f.write(f"version={version}\n")
+              f.write(f"build={build}\n")
+              f.write(f"min_os={min_os}\n")
+              f.write(f"size={size}\n")
+
+          print(f"Bundle ID: {bundle_id}")
+          print(f"Version:   {version}")
+          print(f"Build:     {build}")
+          print(f"Min iOS:   {min_os}")
+          print(f"IPA size:  {size}")
+          PY
+
+      - name: Get upstream release information
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh api \
+            "repos/NuvioMedia/NuvioMobile/releases/tags/$NUVIO_TAG" \
+            > "$RUNNER_TEMP/upstream-release.json"
+
+          echo "Upstream release:"
+          jq '{
+            tag_name,
+            published_at,
+            html_url,
+            prerelease
+          }' "$RUNNER_TEMP/upstream-release.json"
+
+      - name: Update source.json
+        env:
+          BUNDLE_ID: ${{ steps.metadata.outputs.bundle_id }}
+          APP_VERSION: ${{ steps.metadata.outputs.version }}
+          BUILD_VERSION: ${{ steps.metadata.outputs.build }}
+          MIN_OS: ${{ steps.metadata.outputs.min_os }}
+          IPA_SIZE: ${{ steps.metadata.outputs.size }}
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = os.environ["NUVIO_TAG"]
+
+          bundle_id = os.environ["BUNDLE_ID"]
+          version = os.environ["APP_VERSION"]
+          build_version = os.environ["BUILD_VERSION"]
+          min_os = os.environ["MIN_OS"]
+          ipa_size = int(os.environ["IPA_SIZE"])
+
+          release_info_path = Path(os.environ["RUNNER_TEMP"]) / "upstream-release.json"
+
+          with release_info_path.open("r", encoding="utf-8") as f:
+              upstream = json.load(f)
+
+          date = upstream.get("published_at")
+          release_notes = upstream.get("body") or f"Nuvio {version}"
+          upstream_url = upstream.get("html_url")
+
+          download_url = (
+              f"https://github.com/{repo}/releases/download/"
+              f"{tag}/Nuvio-{tag}.ipa"
+          )
+
+          icon_url = (
+              "https://raw.githubusercontent.com/"
+              f"NuvioMedia/NuvioMobile/{tag}/"
+              "iosApp/iosApp/Assets.xcassets/"
+              "AppIcon.appiconset/app-icon-1024.png"
+          )
+
+          website = f"https://github.com/{repo}"
+
+          new_version = {
+              "version": version,
+              "buildVersion": build_version,
+              "date": date,
+              "localizedDescription": release_notes,
+              "downloadURL": download_url,
+              "size": ipa_size,
+              "minOSVersion": min_os
+          }
+
+          source_path = Path("source.json")
+
+          if source_path.exists():
+              with source_path.open("r", encoding="utf-8") as f:
+                  source = json.load(f)
+          else:
+              source = {
+                  "name": "Nuvio iOS (Unofficial)",
+                  "subtitle": "Automatic iOS builds of Nuvio",
+                  "description": (
+                      "Unofficial SideStore source containing iOS builds "
+                      "created automatically from official Nuvio releases."
+                  ),
+                  "website": website,
+                  "iconURL": icon_url,
+                  "tintColor": "7B2FF7",
+                  "news": [],
+                  "apps": [
+                      {
+                          "name": "Nuvio",
+                          "bundleIdentifier": bundle_id,
+                          "developerName": "Nuvio",
+                          "subtitle": "Watch your library, anywhere",
+                          "localizedDescription": (
+                              "Unofficial iOS build generated automatically "
+                              "from the official NuvioMobile source code."
+                          ),
+                          "iconURL": icon_url,
+                          "tintColor": "7B2FF7",
+                          "category": "entertainment",
+                          "versions": []
+                      }
+                  ]
+              }
+
+          # Keep source-level information current.
+          source["website"] = website
+          source["iconURL"] = icon_url
+
+          app = source["apps"][0]
+
+          app["bundleIdentifier"] = bundle_id
+          app["iconURL"] = icon_url
+
+          versions = app.setdefault("versions", [])
+
+          # Remove any existing entry for the same version/build.
+          versions = [
+              item
+              for item in versions
+              if not (
+                  item.get("version") == version
+                  and str(item.get("buildVersion")) == str(build_version)
+              )
+          ]
+
+          # Newest version belongs first.
+          versions.insert(0, new_version)
+
+          app["versions"] = versions
+
+          with source_path.open("w", encoding="utf-8") as f:
+              json.dump(
+                  source,
+                  f,
+                  ensure_ascii=False,
+                  indent=2
+              )
+              f.write("\n")
+
+          print()
+          print("Updated source.json:")
+          print()
+          print(json.dumps(source, indent=2))
+          PY
+
+      - name: Validate source.json
+        run: |
+          set -euo pipefail
+
+          python3 -m json.tool source.json >/dev/null
+
+          echo "source.json is valid JSON."
+
+          echo
+          echo "Current versions:"
+
+          jq -r \
+            '.apps[0].versions[] |
+            "\(.version) (\(.buildVersion)) -> \(.downloadURL)"' \
+            source.json
+
+      - name: Commit source.json
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- source.json && git ls-files --error-unmatch source.json >/dev/null 2>&1; then
+            echo "source.json is already up to date."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add source.json
+
+          git commit \
+            -m "Update SideStore source for Nuvio $NUVIO_TAG"
+
+          git push origin main
+
+      - name: Show SideStore source URL
+        run: |
+          set -euo pipefail
+
+          echo
+          echo "=================================================="
+          echo "SideStore source URL"
+          echo "=================================================="
+          echo
+          echo "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/source.json"
+          echo
