@@ -118,8 +118,8 @@ jobs:
           git rev-parse HEAD
 
           echo
-          echo "Submodules:"
-          git submodule status
+          echo "MPVKit commit:"
+          git -C MPVKit rev-parse HEAD
 
       - name: Show Nuvio version
         run: |
