@@ -87,9 +87,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "macOS:"
           sw_vers
+
+          echo
+          echo "Xcode:"
           xcodebuild -version
-          java -version || true
+
+          echo
+          echo "Hardware:"
+          system_profiler SPHardwareDataType || true
+
+          echo
+          echo "Memory:"
+          sysctl hw.memsize || true
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -131,14 +142,64 @@ jobs:
             echo "Version.xcconfig not found."
           fi
 
-      - name: Make Gradle wrapper executable
-        run: |
-          chmod +x upstream/gradlew
-
-      - name: Build unsigned iOS app
+      - name: Configure Gradle memory for GitHub runner
         working-directory: upstream
         run: |
           set -euo pipefail
+
+          echo "Original Gradle settings:"
+          cat gradle.properties
+
+          echo
+          echo "Adjusting memory limits for GitHub Actions..."
+
+          sed -i '' \
+            's/^kotlin\.daemon\.jvmargs=.*/kotlin.daemon.jvmargs=-Xmx2048M/' \
+            gradle.properties
+
+          sed -i '' \
+            's/^kotlin\.native\.jvmArgs=.*/kotlin.native.jvmArgs=-Xmx3072M/' \
+            gradle.properties
+
+          sed -i '' \
+            's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx3072M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=1024m/' \
+            gradle.properties
+
+          echo
+          echo "GitHub Actions Gradle settings:"
+          cat gradle.properties
+
+      - name: Make Gradle wrapper executable
+        run: |
+          set -euo pipefail
+
+          chmod +x upstream/gradlew
+
+      - name: Verify Gradle
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+
+          ./gradlew --version
+
+      - name: Build unsigned iOS app
+        working-directory: upstream
+        env:
+          GRADLE_OPTS: >-
+            -Xmx3072M
+            -Dfile.encoding=UTF-8
+            -XX:MaxMetaspaceSize=1024m
+          KOTLIN_DAEMON_JVMARGS: "-Xmx2048M"
+        run: |
+          set -o pipefail
+
+          BUILD_LOG="$RUNNER_TEMP/xcodebuild.log"
+
+          echo "Building Nuvio $NUVIO_TAG..."
+          echo
+          echo "Full build log:"
+          echo "$BUILD_LOG"
+          echo
 
           xcodebuild \
             -project iosApp/iosApp.xcodeproj \
@@ -151,7 +212,36 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
-            build
+            build \
+            2>&1 | tee "$BUILD_LOG"
+
+          BUILD_STATUS=${PIPESTATUS[0]}
+
+          if [ "$BUILD_STATUS" -ne 0 ]; then
+            echo
+            echo "=================================================="
+            echo "BUILD FAILED"
+            echo "=================================================="
+            echo
+
+            echo "Searching build log for Gradle/Kotlin errors..."
+            echo
+
+            grep -n -E \
+              "FAILURE:|What went wrong|Execution failed|Exception|OutOfMemory|heap space|Could not reserve|Could not create|error:|ERROR|e: " \
+              "$BUILD_LOG" \
+              | tail -200 || true
+
+            echo
+            echo "=================================================="
+            echo "Last 300 lines of complete build log"
+            echo "=================================================="
+            echo
+
+            tail -300 "$BUILD_LOG" || true
+
+            exit "$BUILD_STATUS"
+          fi
 
       - name: Locate built app
         id: app
@@ -174,7 +264,8 @@ jobs:
             echo "Build products:"
 
             if [ -d "$RUNNER_TEMP/nuvio-derived/Build/Products" ]; then
-              find "$RUNNER_TEMP/nuvio-derived/Build/Products" \
+              find \
+                "$RUNNER_TEMP/nuvio-derived/Build/Products" \
                 -maxdepth 3 \
                 -print
             fi
@@ -199,15 +290,52 @@ jobs:
             -c "Print :CFBundleIdentifier" \
             "$PLIST"
 
+          echo
           echo "Version:"
           /usr/libexec/PlistBuddy \
             -c "Print :CFBundleShortVersionString" \
             "$PLIST"
 
+          echo
           echo "Build:"
           /usr/libexec/PlistBuddy \
             -c "Print :CFBundleVersion" \
             "$PLIST"
+
+          echo
+          echo "Minimum iOS:"
+          /usr/libexec/PlistBuddy \
+            -c "Print :MinimumOSVersion" \
+            "$PLIST" || true
+
+      - name: Show embedded frameworks
+        run: |
+          set -euo pipefail
+
+          APP="${{ steps.app.outputs.app_path }}"
+
+          echo "Frameworks embedded in Nuvio.app:"
+
+          if [ -d "$APP/Frameworks" ]; then
+            find "$APP/Frameworks" \
+              -maxdepth 2 \
+              -type d \
+              -print
+          else
+            echo "No Frameworks directory found."
+          fi
+
+          echo
+          echo "App extensions:"
+
+          if [ -d "$APP/PlugIns" ]; then
+            find "$APP/PlugIns" \
+              -maxdepth 2 \
+              -type d \
+              -print
+          else
+            echo "No PlugIns directory found."
+          fi
 
       - name: Package IPA
         id: package
@@ -231,7 +359,7 @@ jobs:
             "$IPA" \
             Payload
 
-          echo "Created:"
+          echo "Created IPA:"
           ls -lh "$IPA"
 
           echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
@@ -242,11 +370,16 @@ jobs:
 
           IPA="${{ steps.package.outputs.ipa }}"
 
+          echo "Testing ZIP integrity..."
           unzip -t "$IPA"
 
           echo
-          echo "IPA contents:"
-          unzip -l "$IPA" | head -80
+          echo "IPA size:"
+          ls -lh "$IPA"
+
+          echo
+          echo "Top-level IPA contents:"
+          unzip -l "$IPA" | head -100
 
       - name: Create GitHub release
         env:
@@ -264,8 +397,12 @@ jobs:
           Source:
           ${UPSTREAM_URL}
 
-          This IPA was built automatically from the unmodified official
+          Built automatically from the official
           NuvioMedia/NuvioMobile ${NUVIO_TAG} source code.
+
+          The application source code is unchanged. The CI workflow lowers
+          Nuvio's Gradle/Kotlin JVM memory limits so the project can build
+          on a standard GitHub Actions macOS runner.
 
           The IPA is unsigned and intended for sideloading with tools such
           as SideStore or Sideloadly.
