@@ -1,11 +1,9 @@
 name: Build Nuvio iOS IPA
 
 on:
-  # Check upstream automatically once per hour.
   schedule:
     - cron: "17 * * * *"
 
-  # Also lets you start a build manually from the Actions tab.
   workflow_dispatch:
     inputs:
       tag:
@@ -73,7 +71,6 @@ jobs:
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
-
   build:
     name: Build ${{ needs.check-release.outputs.tag }}
     needs: check-release
@@ -84,8 +81,6 @@ jobs:
 
     env:
       NUVIO_TAG: ${{ needs.check-release.outputs.tag }}
-      DERIVED_DATA: ${{ runner.temp }}/nuvio-derived
-      PACKAGE_DIR: ${{ runner.temp }}/nuvio-package
 
     steps:
       - name: Show build environment
@@ -96,13 +91,11 @@ jobs:
           xcodebuild -version
           java -version || true
 
-
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-
 
       - name: Clone official Nuvio release
         run: |
@@ -128,18 +121,19 @@ jobs:
           echo "Submodules:"
           git submodule status
 
-
       - name: Show Nuvio version
         run: |
           set -euo pipefail
 
-          cat upstream/iosApp/Configuration/Version.xcconfig
-
+          if [ -f upstream/iosApp/Configuration/Version.xcconfig ]; then
+            cat upstream/iosApp/Configuration/Version.xcconfig
+          else
+            echo "Version.xcconfig not found."
+          fi
 
       - name: Make Gradle wrapper executable
         run: |
           chmod +x upstream/gradlew
-
 
       - name: Build unsigned iOS app
         working-directory: upstream
@@ -152,13 +146,12 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
-            -derivedDataPath "$DERIVED_DATA" \
+            -derivedDataPath "$RUNNER_TEMP/nuvio-derived" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             build
-
 
       - name: Locate built app
         id: app
@@ -168,7 +161,7 @@ jobs:
           echo "Looking for Nuvio.app..."
 
           APP_PATH="$(find \
-            "$DERIVED_DATA/Build/Products/Release-iphoneos" \
+            "$RUNNER_TEMP/nuvio-derived/Build/Products/Release-iphoneos" \
             -maxdepth 1 \
             -type d \
             -name 'Nuvio.app' \
@@ -179,7 +172,13 @@ jobs:
             echo "Nuvio.app was not found."
             echo
             echo "Build products:"
-            find "$DERIVED_DATA/Build/Products" -maxdepth 3 -print
+
+            if [ -d "$RUNNER_TEMP/nuvio-derived/Build/Products" ]; then
+              find "$RUNNER_TEMP/nuvio-derived/Build/Products" \
+                -maxdepth 3 \
+                -print
+            fi
+
             exit 1
           fi
 
@@ -187,7 +186,6 @@ jobs:
           echo "$APP_PATH"
 
           echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
-
 
       - name: Inspect app metadata
         run: |
@@ -211,13 +209,13 @@ jobs:
             -c "Print :CFBundleVersion" \
             "$PLIST"
 
-
       - name: Package IPA
         id: package
         run: |
           set -euo pipefail
 
           APP="${{ steps.app.outputs.app_path }}"
+          PACKAGE_DIR="$RUNNER_TEMP/nuvio-package"
 
           rm -rf "$PACKAGE_DIR"
           mkdir -p "$PACKAGE_DIR/Payload"
@@ -238,7 +236,6 @@ jobs:
 
           echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
 
-
       - name: Validate IPA
         run: |
           set -euo pipefail
@@ -250,7 +247,6 @@ jobs:
           echo
           echo "IPA contents:"
           unzip -l "$IPA" | head -80
-
 
       - name: Create GitHub release
         env:
@@ -276,15 +272,17 @@ jobs:
           EOF
           )"
 
-          EXTRA_ARGS=()
-
           if [ "$IS_PRERELEASE" = "true" ]; then
-            EXTRA_ARGS+=(--prerelease)
+            gh release create "$NUVIO_TAG" \
+              "$IPA#Nuvio-${NUVIO_TAG}.ipa" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Nuvio ${NUVIO_TAG} iOS" \
+              --notes "$NOTES" \
+              --prerelease
+          else
+            gh release create "$NUVIO_TAG" \
+              "$IPA#Nuvio-${NUVIO_TAG}.ipa" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Nuvio ${NUVIO_TAG} iOS" \
+              --notes "$NOTES"
           fi
-
-          gh release create "$NUVIO_TAG" \
-            "$IPA#Nuvio-${NUVIO_TAG}.ipa" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Nuvio ${NUVIO_TAG} iOS" \
-            --notes "$NOTES" \
-            "${EXTRA_ARGS[@]}"
