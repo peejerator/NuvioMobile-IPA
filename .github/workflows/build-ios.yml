@@ -1,0 +1,290 @@
+name: Build Nuvio iOS IPA
+
+on:
+  # Check upstream automatically once per hour.
+  schedule:
+    - cron: "17 * * * *"
+
+  # Also lets you start a build manually from the Actions tab.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream Nuvio tag to build. Leave blank for latest release."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nuvio-ios-builder
+  cancel-in-progress: false
+
+jobs:
+  check-release:
+    name: Check upstream release
+    runs-on: ubuntu-latest
+
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      should_build: ${{ steps.release.outputs.should_build }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      upstream_url: ${{ steps.release.outputs.upstream_url }}
+
+    steps:
+      - name: Determine Nuvio version
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${MANUAL_TAG:-}" ]; then
+            TAG="$MANUAL_TAG"
+
+            RELEASE_JSON="$(gh api \
+              "repos/NuvioMedia/NuvioMobile/releases/tags/$TAG")"
+          else
+            RELEASE_JSON="$(gh api \
+              repos/NuvioMedia/NuvioMobile/releases/latest)"
+
+            TAG="$(echo "$RELEASE_JSON" | jq -r '.tag_name')"
+          fi
+
+          PRERELEASE="$(echo "$RELEASE_JSON" | jq -r '.prerelease')"
+          UPSTREAM_URL="$(echo "$RELEASE_JSON" | jq -r '.html_url')"
+
+          echo "Upstream release: $TAG"
+          echo "Prerelease: $PRERELEASE"
+          echo "URL: $UPSTREAM_URL"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "upstream_url=$UPSTREAM_URL" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$TAG" \
+              --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+
+            echo "Release $TAG already exists in this repository."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release $TAG has not been built yet."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+
+  build:
+    name: Build ${{ needs.check-release.outputs.tag }}
+    needs: check-release
+
+    if: needs.check-release.outputs.should_build == 'true'
+
+    runs-on: macos-15
+
+    env:
+      NUVIO_TAG: ${{ needs.check-release.outputs.tag }}
+      DERIVED_DATA: ${{ runner.temp }}/nuvio-derived
+      PACKAGE_DIR: ${{ runner.temp }}/nuvio-package
+
+    steps:
+      - name: Show build environment
+        run: |
+          set -euo pipefail
+
+          sw_vers
+          xcodebuild -version
+          java -version || true
+
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+
+      - name: Clone official Nuvio release
+        run: |
+          set -euo pipefail
+
+          git clone \
+            --branch "$NUVIO_TAG" \
+            --single-branch \
+            --depth 1 \
+            --recurse-submodules \
+            https://github.com/NuvioMedia/NuvioMobile.git \
+            upstream
+
+          cd upstream
+
+          git submodule update --init --recursive
+
+          echo
+          echo "Nuvio commit:"
+          git rev-parse HEAD
+
+          echo
+          echo "Submodules:"
+          git submodule status
+
+
+      - name: Show Nuvio version
+        run: |
+          set -euo pipefail
+
+          cat upstream/iosApp/Configuration/Version.xcconfig
+
+
+      - name: Make Gradle wrapper executable
+        run: |
+          chmod +x upstream/gradlew
+
+
+      - name: Build unsigned iOS app
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+
+          xcodebuild \
+            -project iosApp/iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+
+      - name: Locate built app
+        id: app
+        run: |
+          set -euo pipefail
+
+          echo "Looking for Nuvio.app..."
+
+          APP_PATH="$(find \
+            "$DERIVED_DATA/Build/Products/Release-iphoneos" \
+            -maxdepth 1 \
+            -type d \
+            -name 'Nuvio.app' \
+            -print \
+            -quit)"
+
+          if [ -z "$APP_PATH" ]; then
+            echo "Nuvio.app was not found."
+            echo
+            echo "Build products:"
+            find "$DERIVED_DATA/Build/Products" -maxdepth 3 -print
+            exit 1
+          fi
+
+          echo "Found app:"
+          echo "$APP_PATH"
+
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+
+
+      - name: Inspect app metadata
+        run: |
+          set -euo pipefail
+
+          APP="${{ steps.app.outputs.app_path }}"
+          PLIST="$APP/Info.plist"
+
+          echo "Bundle identifier:"
+          /usr/libexec/PlistBuddy \
+            -c "Print :CFBundleIdentifier" \
+            "$PLIST"
+
+          echo "Version:"
+          /usr/libexec/PlistBuddy \
+            -c "Print :CFBundleShortVersionString" \
+            "$PLIST"
+
+          echo "Build:"
+          /usr/libexec/PlistBuddy \
+            -c "Print :CFBundleVersion" \
+            "$PLIST"
+
+
+      - name: Package IPA
+        id: package
+        run: |
+          set -euo pipefail
+
+          APP="${{ steps.app.outputs.app_path }}"
+
+          rm -rf "$PACKAGE_DIR"
+          mkdir -p "$PACKAGE_DIR/Payload"
+
+          cp -R "$APP" "$PACKAGE_DIR/Payload/Nuvio.app"
+
+          IPA="$RUNNER_TEMP/Nuvio-${NUVIO_TAG}.ipa"
+
+          cd "$PACKAGE_DIR"
+
+          /usr/bin/zip \
+            -qry \
+            "$IPA" \
+            Payload
+
+          echo "Created:"
+          ls -lh "$IPA"
+
+          echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
+
+
+      - name: Validate IPA
+        run: |
+          set -euo pipefail
+
+          IPA="${{ steps.package.outputs.ipa }}"
+
+          unzip -t "$IPA"
+
+          echo
+          echo "IPA contents:"
+          unzip -l "$IPA" | head -80
+
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_URL: ${{ needs.check-release.outputs.upstream_url }}
+          IS_PRERELEASE: ${{ needs.check-release.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          IPA="${{ steps.package.outputs.ipa }}"
+
+          NOTES="$(cat <<EOF
+          Unofficial unsigned iOS build of Nuvio ${NUVIO_TAG}.
+
+          Source:
+          ${UPSTREAM_URL}
+
+          This IPA was built automatically from the unmodified official
+          NuvioMedia/NuvioMobile ${NUVIO_TAG} source code.
+
+          The IPA is unsigned and intended for sideloading with tools such
+          as SideStore or Sideloadly.
+          EOF
+          )"
+
+          EXTRA_ARGS=()
+
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            EXTRA_ARGS+=(--prerelease)
+          fi
+
+          gh release create "$NUVIO_TAG" \
+            "$IPA#Nuvio-${NUVIO_TAG}.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Nuvio ${NUVIO_TAG} iOS" \
+            --notes "$NOTES" \
+            "${EXTRA_ARGS[@]}"
