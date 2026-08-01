@@ -77,12 +77,8 @@ jobs:
 
     if: needs.check-release.outputs.should_build == 'true'
 
-    # Intel GitHub-hosted macOS runner:
-    # 4 vCPU / 14 GB RAM.
-    #
-    # Nuvio's Kotlin/Native release linker requires substantially more
-    # heap than the 7 GB ARM runner can comfortably provide.
-    runs-on: macos-15-intel
+    # Newer macOS/Xcode SDK + 14 GB RAM.
+    runs-on: macos-26-intel
 
     env:
       NUVIO_TAG: ${{ needs.check-release.outputs.tag }}
@@ -104,16 +100,20 @@ jobs:
           xcodebuild -version
 
           echo
-          echo "Hardware:"
-          system_profiler SPHardwareDataType || true
+          echo "iPhoneOS SDK:"
+          xcrun --sdk iphoneos --show-sdk-version
+
+          echo
+          echo "SDK path:"
+          xcrun --sdk iphoneos --show-sdk-path
 
           echo
           echo "Physical memory:"
           sysctl hw.memsize || true
 
           echo
-          echo "Memory status:"
-          vm_stat || true
+          echo "Hardware:"
+          system_profiler SPHardwareDataType || true
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -155,6 +155,26 @@ jobs:
             echo "Version.xcconfig not found."
           fi
 
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}-${{ hashFiles('upstream/**/*.gradle.kts', 'upstream/**/*.gradle', 'upstream/gradle/libs.versions.toml', 'upstream/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}-
+            gradle-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Cache Kotlin Native
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.konan
+          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}
+          restore-keys: |
+            konan-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Create local.properties
         working-directory: upstream
         run: |
@@ -170,34 +190,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Original Gradle settings:"
-          cat gradle.properties
+          echo "Original memory settings:"
+          grep -E \
+            '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|kotlin\.native\.jvmArgs|org\.gradle\.workers\.max|org\.gradle\.parallel)=' \
+            gradle.properties || true
 
           echo
-          echo "Configuring Gradle/Kotlin memory..."
+          echo "Configuring memory..."
 
-          # The Kotlin/Native linker executes in the Gradle daemon for this
-          # project. It previously OOMed with a 2 GiB Gradle heap.
-          #
-          # The Intel macOS runner has 14 GB of physical RAM, so give Gradle
-          # a 10 GB maximum heap while leaving several GB for Xcode/macOS.
           sed -i '' \
             's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx10240M -Xms1024M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=1024m/' \
             gradle.properties
 
-          # Keep a reasonable Kotlin daemon limit. Native release linking
-          # is handled through the Gradle daemon in this build.
           sed -i '' \
             's/^kotlin\.daemon\.jvmargs=.*/kotlin.daemon.jvmargs=-Xmx2048M/' \
             gradle.properties
 
-          # Retain a high Kotlin/Native JVM limit in case any compiler
-          # subprocess honors this independently.
           sed -i '' \
             's/^kotlin\.native\.jvmArgs=.*/kotlin.native.jvmArgs=-Xmx10240M/' \
             gradle.properties
 
-          # Keep peak parallel memory usage under control.
           if grep -q '^org\.gradle\.workers\.max=' gradle.properties; then
             sed -i '' \
               's/^org\.gradle\.workers\.max=.*/org.gradle.workers.max=1/' \
@@ -215,8 +227,10 @@ jobs:
           fi
 
           echo
-          echo "Final Gradle settings:"
-          cat gradle.properties
+          echo "Final memory settings:"
+          grep -E \
+            '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|kotlin\.native\.jvmArgs|org\.gradle\.workers\.max|org\.gradle\.parallel)=' \
+            gradle.properties || true
 
       - name: Make Gradle wrapper executable
         run: |
@@ -236,23 +250,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Make sure no daemon launched before we changed gradle.properties
-          # survives with an old heap configuration.
           ./gradlew --stop || true
-
-      - name: Confirm effective Gradle memory settings
-        working-directory: upstream
-        run: |
-          set -euo pipefail
-
-          echo "Memory-related gradle.properties entries:"
-          grep -E \
-            '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|kotlin\.native\.jvmArgs|org\.gradle\.workers\.max|org\.gradle\.parallel)=' \
-            gradle.properties || true
-
-          echo
-          echo "Expected Gradle max heap:"
-          echo "10 GiB"
 
       - name: Build unsigned iOS app
         working-directory: upstream
@@ -261,22 +259,30 @@ jobs:
 
           BUILD_LOG="$RUNNER_TEMP/xcodebuild.log"
 
-          echo "Building Nuvio $NUVIO_TAG..."
+          echo "=================================================="
+          echo "Build configuration"
+          echo "=================================================="
+
+          echo "Nuvio tag: $NUVIO_TAG"
+
           echo
-          echo "Runner architecture:"
+          echo "Xcode:"
+          xcodebuild -version
+
+          echo
+          echo "iPhoneOS SDK:"
+          xcrun --sdk iphoneos --show-sdk-version
+
+          echo
+          echo "Architecture:"
           uname -m
 
           echo
-          echo "Memory before build:"
-          vm_stat || true
+          echo "Memory:"
+          sysctl hw.memsize || true
 
           echo
-          echo "Full build log:"
-          echo "$BUILD_LOG"
-
-          echo
-          echo "IMPORTANT:"
-          echo "The Gradle daemon should report a maximum heap near 10 GiB."
+          echo "Starting Xcode build..."
           echo
 
           xcodebuild \
@@ -312,13 +318,13 @@ jobs:
             echo
 
             grep -n -E \
-              "FAILURE:|What went wrong|Execution failed|Exception|OutOfMemory|heap space|currently configured max heap|Could not reserve|Could not create|Compilation failed|error:|ERROR|e: " \
+              "FAILURE:|What went wrong|Execution failed|Exception|OutOfMemory|heap space|currently configured max heap|Compilation failed|error:|ERROR|e: " \
               "$BUILD_LOG" \
               | tail -300 || true
 
             echo
             echo "=================================================="
-            echo "Last 400 lines of complete build log"
+            echo "Last 400 lines"
             echo "=================================================="
             echo
 
@@ -326,6 +332,12 @@ jobs:
 
             exit "$BUILD_STATUS"
           fi
+
+      - name: Stop Gradle daemon after build
+        if: always()
+        working-directory: upstream
+        run: |
+          ./gradlew --stop || true
 
       - name: Locate built app
         id: app
@@ -344,10 +356,11 @@ jobs:
 
           if [ -z "$APP_PATH" ]; then
             echo "Nuvio.app was not found."
-            echo
-            echo "Build products:"
 
             if [ -d "$RUNNER_TEMP/nuvio-derived/Build/Products" ]; then
+              echo
+              echo "Build products:"
+
               find \
                 "$RUNNER_TEMP/nuvio-derived/Build/Products" \
                 -maxdepth 3 \
@@ -392,16 +405,17 @@ jobs:
             -c "Print :MinimumOSVersion" \
             "$PLIST" || true
 
-      - name: Show embedded frameworks
+      - name: Show embedded frameworks and extensions
         run: |
           set -euo pipefail
 
           APP="${{ steps.app.outputs.app_path }}"
 
-          echo "Frameworks embedded in Nuvio.app:"
+          echo "Frameworks:"
 
           if [ -d "$APP/Frameworks" ]; then
-            find "$APP/Frameworks" \
+            find \
+              "$APP/Frameworks" \
               -maxdepth 2 \
               -type d \
               -print
@@ -410,10 +424,11 @@ jobs:
           fi
 
           echo
-          echo "App extensions:"
+          echo "Extensions:"
 
           if [ -d "$APP/PlugIns" ]; then
-            find "$APP/PlugIns" \
+            find \
+              "$APP/PlugIns" \
               -maxdepth 2 \
               -type d \
               -print
@@ -430,9 +445,12 @@ jobs:
           PACKAGE_DIR="$RUNNER_TEMP/nuvio-package"
 
           rm -rf "$PACKAGE_DIR"
+
           mkdir -p "$PACKAGE_DIR/Payload"
 
-          cp -R "$APP" "$PACKAGE_DIR/Payload/Nuvio.app"
+          cp -R \
+            "$APP" \
+            "$PACKAGE_DIR/Payload/Nuvio.app"
 
           IPA="$RUNNER_TEMP/Nuvio-${NUVIO_TAG}.ipa"
 
@@ -443,6 +461,7 @@ jobs:
             "$IPA" \
             Payload
 
+          echo
           echo "Created IPA:"
           ls -lh "$IPA"
 
@@ -458,11 +477,11 @@ jobs:
           unzip -t "$IPA"
 
           echo
-          echo "IPA size:"
+          echo "IPA:"
           ls -lh "$IPA"
 
           echo
-          echo "Top-level IPA contents:"
+          echo "IPA contents:"
           unzip -l "$IPA" | head -100
 
       - name: Create GitHub release
@@ -478,15 +497,16 @@ jobs:
           NOTES="$(cat <<EOF
           Unofficial unsigned iOS build of Nuvio ${NUVIO_TAG}.
 
-          Source:
+          Upstream source:
           ${UPSTREAM_URL}
 
-          Built automatically from the official
-          NuvioMedia/NuvioMobile ${NUVIO_TAG} source code.
+          This IPA was built automatically from the official
+          NuvioMedia/NuvioMobile ${NUVIO_TAG} source.
 
-          The application source code is unchanged. The CI environment
-          creates local.properties and adjusts Gradle/Kotlin memory limits
-          so the Kotlin/Native release linker can run on GitHub Actions.
+          No application source-code modifications are included.
+
+          The CI environment creates the local.properties file required by
+          the Gradle build and adjusts build memory limits for GitHub Actions.
 
           The IPA is unsigned and intended for sideloading with tools such
           as SideStore or Sideloadly.
