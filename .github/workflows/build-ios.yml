@@ -7,9 +7,15 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Upstream Nuvio tag. Leave blank for latest release."
+        description: "Upstream Nuvio tag. Leave blank for latest stable release."
         required: false
         type: string
+
+      force_rebuild:
+        description: "Rebuild even if this version already exists"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -18,7 +24,12 @@ concurrency:
   group: nuvio-ios-builder
   cancel-in-progress: false
 
+
 jobs:
+  # ====================================================================
+  # CHECK UPSTREAM
+  # ====================================================================
+
   check-release:
     name: Check upstream release
     runs-on: ubuntu-latest
@@ -35,54 +46,95 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MANUAL_TAG: ${{ inputs.tag }}
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
         run: |
           set -euo pipefail
 
           if [ -n "${MANUAL_TAG:-}" ]; then
+
             TAG="$MANUAL_TAG"
 
-            RELEASE_JSON="$(gh api \
-              "repos/NuvioMedia/NuvioMobile/releases/tags/$TAG")"
-          else
-            RELEASE_JSON="$(gh api \
-              repos/NuvioMedia/NuvioMobile/releases/latest)"
+            RELEASE_JSON="$(
+              gh api \
+                "repos/NuvioMedia/NuvioMobile/releases/tags/$TAG"
+            )"
 
-            TAG="$(echo "$RELEASE_JSON" | jq -r '.tag_name')"
+          else
+
+            RELEASE_JSON="$(
+              gh api \
+                repos/NuvioMedia/NuvioMobile/releases/latest
+            )"
+
+            TAG="$(
+              echo "$RELEASE_JSON" |
+                jq -r '.tag_name'
+            )"
+
           fi
 
-          PRERELEASE="$(echo "$RELEASE_JSON" | jq -r '.prerelease')"
-          UPSTREAM_URL="$(echo "$RELEASE_JSON" | jq -r '.html_url')"
+          PRERELEASE="$(
+            echo "$RELEASE_JSON" |
+              jq -r '.prerelease'
+          )"
+
+          UPSTREAM_URL="$(
+            echo "$RELEASE_JSON" |
+              jq -r '.html_url'
+          )"
 
           echo "Upstream release: $TAG"
           echo "Prerelease: $PRERELEASE"
           echo "URL: $UPSTREAM_URL"
+          echo "Force rebuild: ${FORCE_REBUILD:-false}"
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "upstream_url=$UPSTREAM_URL" >> "$GITHUB_OUTPUT"
 
-          if gh release view "$TAG" \
-              --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if [ "${FORCE_REBUILD:-false}" = "true" ]; then
 
-            echo "Release $TAG already exists in this repository."
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Release $TAG has not been built yet."
+            echo "Force rebuild requested."
             echo "should_build=true" >> "$GITHUB_OUTPUT"
+
+          elif gh release view "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              >/dev/null 2>&1; then
+
+            echo "Release $TAG already exists."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+
+          else
+
+            echo "Release $TAG has not been built."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+
           fi
+
+
+  # ====================================================================
+  # BUILD IPA
+  # ====================================================================
 
   build:
     name: Build ${{ needs.check-release.outputs.tag }}
-    needs: check-release
+
+    needs:
+      - check-release
 
     if: needs.check-release.outputs.should_build == 'true'
 
+    # 14 GB Intel runner + current Xcode/iOS SDK.
     runs-on: macos-26-intel
 
     env:
       NUVIO_TAG: ${{ needs.check-release.outputs.tag }}
 
     steps:
+      # ----------------------------------------------------------------
+      # Environment
+      # ----------------------------------------------------------------
+
       - name: Show build environment
         run: |
           set -euo pipefail
@@ -103,14 +155,20 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
 
           echo
-          echo "Physical memory:"
+          echo "Memory:"
           sysctl hw.memsize || true
+
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
+
+      # ----------------------------------------------------------------
+      # Clone exact upstream release
+      # ----------------------------------------------------------------
 
       - name: Clone official Nuvio release
         run: |
@@ -126,7 +184,9 @@ jobs:
 
           cd upstream
 
-          git submodule update --init --recursive
+          git submodule update \
+            --init \
+            --recursive
 
           echo
           echo "Nuvio commit:"
@@ -136,15 +196,1208 @@ jobs:
           echo "MPVKit commit:"
           git -C MPVKit rev-parse HEAD
 
-      - name: Show Nuvio version
+
+      # ----------------------------------------------------------------
+      # Discover runtime configuration schema from THIS release.
+      #
+      # We inspect Nuvio's actual build script instead of maintaining
+      # our own authoritative list.
+      # ----------------------------------------------------------------
+
+      - name: Discover expected runtime configuration
+        working-directory: upstream
         run: |
           set -euo pipefail
 
-          if [ -f upstream/iosApp/Configuration/Version.xcconfig ]; then
-            cat upstream/iosApp/Configuration/Version.xcconfig
-          else
-            echo "Version.xcconfig not found."
+          python3 <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          build_file = Path("composeApp/build.gradle.kts")
+
+          if not build_file.exists():
+              raise SystemExit(
+                  "composeApp/build.gradle.kts was not found."
+              )
+
+          text = build_file.read_text(
+              encoding="utf-8"
+          )
+
+          keys = set()
+
+          patterns = [
+              r'props\.getProperty\(\s*"([^"]+)"',
+              r'runtimeConfigValue\(\s*"([^"]+)"',
+          ]
+
+          for pattern in patterns:
+              for match in re.finditer(
+                  pattern,
+                  text
+              ):
+                  keys.add(match.group(1))
+
+          ignored = {
+              "NUVIO_ANDROID_DISTRIBUTION",
+              "NUVIO_IOS_DISTRIBUTION",
+          }
+
+          keys -= ignored
+
+          keys = sorted(keys)
+
+          Path(
+              "../expected-runtime-keys.json"
+          ).write_text(
+              json.dumps(
+                  keys,
+                  indent=2
+              ) + "\n",
+              encoding="utf-8"
+          )
+
+          print(
+              f"Found {len(keys)} expected "
+              "runtime properties:"
+          )
+
+          for key in keys:
+              print(f"  {key}")
+          PY
+
+
+      # ----------------------------------------------------------------
+      # Download official Full Android APK.
+      #
+      # Any architecture should contain the same application-level
+      # runtime configuration. Prefer the smallest full APK.
+      # ----------------------------------------------------------------
+
+      - name: Download official Full APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          APK_DIR="$RUNNER_TEMP/nuvio-apk"
+
+          mkdir -p "$APK_DIR"
+
+          RELEASE_JSON="$(
+            gh api \
+              "repos/NuvioMedia/NuvioMobile/releases/tags/$NUVIO_TAG"
+          )"
+
+          echo "Available APK assets:"
+          echo
+
+          echo "$RELEASE_JSON" |
+            jq -r '
+              .assets[]
+              | select(
+                  .name
+                  | ascii_downcase
+                  | endswith(".apk")
+                )
+              | "\(.name) - \(.size) bytes"
+            '
+
+          APK_NAME="$(
+            echo "$RELEASE_JSON" |
+              jq -r '
+                [
+                  .assets[]
+                  | select(
+                      (.name | ascii_downcase | endswith(".apk"))
+                      and
+                      (.name | test("full"; "i"))
+                    )
+                ]
+                | sort_by(.size)
+                | .[0].name
+              '
+          )"
+
+          if [ -z "$APK_NAME" ] ||
+             [ "$APK_NAME" = "null" ]; then
+
+            echo
+            echo "No Full APK found for $NUVIO_TAG."
+            exit 1
           fi
+
+          echo
+          echo "Selected:"
+          echo "$APK_NAME"
+
+          gh release download "$NUVIO_TAG" \
+            --repo NuvioMedia/NuvioMobile \
+            --pattern "$APK_NAME" \
+            --dir "$APK_DIR"
+
+          APK_PATH="$APK_DIR/$APK_NAME"
+
+          test -f "$APK_PATH"
+
+          echo
+          ls -lh "$APK_PATH"
+
+          echo "OFFICIAL_APK=$APK_PATH" \
+            >> "$GITHUB_ENV"
+
+
+      # ----------------------------------------------------------------
+      # JADX
+      # ----------------------------------------------------------------
+
+      - name: Download JADX
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          JADX_DIR="$RUNNER_TEMP/jadx"
+
+          mkdir -p "$JADX_DIR"
+
+          RELEASE_JSON="$(
+            gh api \
+              repos/skylot/jadx/releases/latest
+          )"
+
+          JADX_URL="$(
+            echo "$RELEASE_JSON" |
+              jq -r '
+                .assets[]
+                | select(
+                    (.name | test("^jadx-[0-9].*\\.zip$"))
+                    and
+                    (.name | contains("gui") | not)
+                    and
+                    (.name | contains("win") | not)
+                  )
+                | .browser_download_url
+              ' |
+              head -1
+          )"
+
+          if [ -z "$JADX_URL" ] ||
+             [ "$JADX_URL" = "null" ]; then
+
+            echo "Could not find JADX archive."
+            exit 1
+          fi
+
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            "$JADX_URL" \
+            --output "$RUNNER_TEMP/jadx.zip"
+
+          unzip \
+            -q \
+            "$RUNNER_TEMP/jadx.zip" \
+            -d "$JADX_DIR"
+
+          chmod +x \
+            "$JADX_DIR/bin/jadx"
+
+          "$JADX_DIR/bin/jadx" \
+            --version
+
+          echo "JADX_BIN=$JADX_DIR/bin/jadx" \
+            >> "$GITHUB_ENV"
+
+
+      - name: Decompile official APK
+        run: |
+          set -euo pipefail
+
+          OUTPUT="$RUNNER_TEMP/jadx-output"
+
+          "$JADX_BIN" \
+            --no-res \
+            --show-bad-code \
+            --threads-count 4 \
+            --output-dir "$OUTPUT" \
+            "$OFFICIAL_APK"
+
+          echo "JADX_OUTPUT=$OUTPUT" \
+            >> "$GITHUB_ENV"
+
+          echo
+          echo "Decompiled source files:"
+
+          find "$OUTPUT" \
+            -type f \
+            \( -name '*.java' -o -name '*.kt' \) |
+            wc -l
+
+
+      # ----------------------------------------------------------------
+      # Extract ALL DEX strings as secondary evidence.
+      #
+      # JADX gives us call-site context.
+      # Raw DEX strings give us values that JADX may inline/obfuscate.
+      # ----------------------------------------------------------------
+
+      - name: Extract DEX strings
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import os
+          import re
+          import struct
+          import zipfile
+          from pathlib import Path
+
+          apk = Path(
+              os.environ["OFFICIAL_APK"]
+          )
+
+          output = (
+              Path(os.environ["RUNNER_TEMP"])
+              / "dex-strings.txt"
+          )
+
+
+          def read_uleb128(data, offset):
+              result = 0
+              shift = 0
+
+              while True:
+                  value = data[offset]
+                  offset += 1
+
+                  result |= (
+                      value & 0x7f
+                  ) << shift
+
+                  if value < 0x80:
+                      return result, offset
+
+                  shift += 7
+
+
+          def extract_dex_strings(data):
+              count, table = struct.unpack_from(
+                  "<II",
+                  data,
+                  0x38
+              )
+
+              values = []
+
+              for index in range(count):
+                  offset = struct.unpack_from(
+                      "<I",
+                      data,
+                      table + index * 4
+                  )[0]
+
+                  _, position = read_uleb128(
+                      data,
+                      offset
+                  )
+
+                  end = data.find(
+                      b"\x00",
+                      position
+                  )
+
+                  raw = data[
+                      position:end
+                  ]
+
+                  try:
+                      value = raw.decode("utf-8")
+                  except UnicodeDecodeError:
+                      value = raw.decode(
+                          "latin-1",
+                          errors="ignore"
+                      )
+
+                  values.append(value)
+
+              return values
+
+
+          values = set()
+
+          with zipfile.ZipFile(
+              apk,
+              "r"
+          ) as archive:
+
+              dex_files = sorted(
+                  name
+                  for name in archive.namelist()
+                  if re.fullmatch(
+                      r"classes\d*\.dex",
+                      name
+                  )
+              )
+
+              if not dex_files:
+                  raise SystemExit(
+                      "No classes*.dex files found."
+                  )
+
+              print("DEX files:")
+
+              for name in dex_files:
+                  print(f"  {name}")
+
+                  values.update(
+                      extract_dex_strings(
+                          archive.read(name)
+                      )
+                  )
+
+          output.write_text(
+              "\n".join(
+                  sorted(values)
+              ) + "\n",
+              encoding="utf-8"
+          )
+
+          print()
+          print(
+              f"Extracted {len(values)} "
+              "unique DEX strings."
+          )
+          PY
+
+
+      # ----------------------------------------------------------------
+      # Reverse-engineer runtime configuration.
+      #
+      # Strategy:
+      #
+      # 1. Parse expected keys from source.
+      # 2. Use strongly identifying patterns for URLs/JWTs.
+      # 3. Use decompiled OAuth call-site context for opaque credentials.
+      # 4. Verify each value exists in the APK.
+      # 5. Refuse to build when a required/unknown new property cannot
+      #    be confidently mapped.
+      # ----------------------------------------------------------------
+
+      - name: Reverse engineer runtime configuration
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          runner = Path(
+              os.environ["RUNNER_TEMP"]
+          )
+
+          expected = json.loads(
+              Path(
+                  "../expected-runtime-keys.json"
+              ).read_text(
+                  encoding="utf-8"
+              )
+          )
+
+          dex_strings = (
+              runner
+              / "dex-strings.txt"
+          ).read_text(
+              encoding="utf-8",
+              errors="ignore"
+          ).splitlines()
+
+          dex_set = set(
+              dex_strings
+          )
+
+          jadx_root = Path(
+              os.environ["JADX_OUTPUT"]
+          )
+
+          source_files = list(
+              jadx_root.rglob("*.java")
+          ) + list(
+              jadx_root.rglob("*.kt")
+          )
+
+          source_texts = []
+
+          for path in source_files:
+              try:
+                  text = path.read_text(
+                      encoding="utf-8",
+                      errors="ignore"
+                  )
+              except Exception:
+                  continue
+
+              source_texts.append(
+                  (path, text)
+              )
+
+
+          def mask(value):
+              if value:
+                  print(
+                      f"::add-mask::{value}"
+                  )
+
+
+          def first_dex(predicate):
+              for value in dex_strings:
+                  if predicate(value):
+                      return value
+
+              return None
+
+
+          def find_url(fragment):
+              fragment = fragment.lower()
+
+              return first_dex(
+                  lambda value:
+                      value.startswith(
+                          ("http://", "https://")
+                      )
+                      and
+                      fragment in value.lower()
+              )
+
+
+          def find_exact_url(host_fragment):
+              candidates = [
+                  value
+                  for value in dex_strings
+                  if value.startswith(
+                      ("http://", "https://")
+                  )
+                  and host_fragment.lower()
+                      in value.lower()
+              ]
+
+              if not candidates:
+                  return None
+
+              return min(
+                  candidates,
+                  key=len
+              )
+
+
+          def find_jwt():
+              pattern = re.compile(
+                  r"^eyJ[A-Za-z0-9_-]+\."
+                  r"eyJ[A-Za-z0-9_-]+\."
+                  r"[A-Za-z0-9_-]+$"
+              )
+
+              candidates = [
+                  value
+                  for value in dex_strings
+                  if len(value) > 100
+                  and pattern.match(value)
+              ]
+
+              for value in candidates:
+                  if value.startswith(
+                      "eyJhbGciOiJIUzI1Ni"
+                  ):
+                      return value
+
+              if len(candidates) == 1:
+                  return candidates[0]
+
+              return None
+
+
+          # ------------------------------------------------------------
+          # Search decompiled source for literal values near integration
+          # markers.
+          # ------------------------------------------------------------
+
+          STRING_RE = re.compile(
+              r'"((?:\\.|[^"\\])*)"'
+          )
+
+
+          def nearby_literals(markers):
+              markers = [
+                  marker.lower()
+                  for marker in markers
+              ]
+
+              scored = []
+
+              for path, text in source_texts:
+                  lower = text.lower()
+
+                  if not any(
+                      marker in lower
+                      for marker in markers
+                  ):
+                      continue
+
+                  literals = []
+
+                  for match in STRING_RE.finditer(text):
+                      raw = match.group(1)
+
+                      try:
+                          value = bytes(
+                              raw,
+                              "utf-8"
+                          ).decode(
+                              "unicode_escape"
+                          )
+                      except Exception:
+                          value = raw
+
+                      if value in dex_set:
+                          literals.append(value)
+
+                  scored.append(
+                      (
+                          path,
+                          literals
+                      )
+                  )
+
+              return scored
+
+
+          def opaque_candidates(
+              markers,
+              regex,
+              exclusions=()
+          ):
+              pattern = re.compile(regex)
+
+              exclusions = {
+                  value.lower()
+                  for value in exclusions
+              }
+
+              candidates = []
+
+              for path, literals in nearby_literals(
+                  markers
+              ):
+                  for value in literals:
+                      lower = value.lower()
+
+                      if lower in exclusions:
+                          continue
+
+                      if pattern.fullmatch(value):
+                          candidates.append(
+                              (
+                                  path,
+                                  value
+                              )
+                          )
+
+              # Deduplicate while preserving evidence.
+              result = {}
+
+              for path, value in candidates:
+                  result.setdefault(
+                      value,
+                      []
+                  ).append(path)
+
+              return result
+
+
+          recovered = {}
+          evidence = {}
+
+
+          def put(key, value, reason):
+              if key not in expected:
+                  return
+
+              if not value:
+                  return
+
+              recovered[key] = value
+              evidence[key] = reason
+              mask(value)
+
+
+          # ============================================================
+          # Public Nuvio backend configuration
+          # ============================================================
+
+          put(
+              "NUVIO_SUPABASE_URL",
+              find_exact_url(
+                  "api-two.nuvioapp.space"
+              ),
+              "matched Nuvio api-two endpoint"
+          )
+
+          put(
+              "NUVIO_SUPABASE_FALLBACK_URL",
+              find_exact_url(
+                  "api.nuvio.tv"
+              ),
+              "matched Nuvio fallback endpoint"
+          )
+
+          put(
+              "NUVIO_SUPABASE_ANON_KEY",
+              find_jwt(),
+              "matched client-side JWT"
+          )
+
+
+          # ============================================================
+          # Sentry
+          # ============================================================
+
+          sentry = first_dex(
+              lambda value:
+                  value.startswith("https://")
+                  and "sentry.io" in value.lower()
+                  and "@" in value
+          )
+
+          put(
+              "SENTRY_DSN",
+              sentry,
+              "matched Sentry DSN"
+          )
+
+
+          # ============================================================
+          # Trakt
+          # ============================================================
+
+          put(
+              "TRAKT_REDIRECT_URI",
+              first_dex(
+                  lambda value:
+                      value == "nuvio://auth/trakt"
+              ),
+              "matched Trakt redirect URI"
+          )
+
+          trakt_candidates = opaque_candidates(
+              markers=[
+                  "api.trakt.tv",
+                  "trakt.tv/oauth",
+                  "nuvio://auth/trakt",
+                  "client_secret",
+                  "client_id",
+              ],
+              regex=r"[0-9a-fA-F]{64}",
+          )
+
+          # Current Nuvio APK layout places the two 64-char Trakt values
+          # in the same OAuth/token-related code region.
+          #
+          # We distinguish them using token-exchange context where JADX
+          # preserves client_secret/client_id labels.
+
+          trakt_id = None
+          trakt_secret = None
+
+          for path, text in source_texts:
+              lower = text.lower()
+
+              if (
+                  "trakt" not in lower
+                  and
+                  "api.trakt.tv" not in lower
+              ):
+                  continue
+
+              literals = [
+                  match.group(1)
+                  for match in STRING_RE.finditer(
+                      text
+                  )
+                  if re.fullmatch(
+                      r"[0-9a-fA-F]{64}",
+                      match.group(1)
+                  )
+              ]
+
+              literals = list(
+                  dict.fromkeys(literals)
+              )
+
+              if len(literals) < 2:
+                  continue
+
+              # Search proximity around client_secret/client_id labels.
+              for value in literals:
+                  positions = [
+                      match.start()
+                      for match in re.finditer(
+                          re.escape(value),
+                          text
+                      )
+                  ]
+
+                  for position in positions:
+                      window = text[
+                          max(0, position - 1500):
+                          position + 1500
+                      ].lower()
+
+                      if (
+                          "client_secret"
+                          in window
+                          and
+                          trakt_secret is None
+                      ):
+                          trakt_secret = value
+
+                      if (
+                          "client_id"
+                          in window
+                          and
+                          trakt_id is None
+                      ):
+                          trakt_id = value
+
+          # If proximity caused both to resolve to the same value,
+          # use the stable call-site pair as fallback.
+          if (
+              trakt_id is None
+              or
+              trakt_secret is None
+              or
+              trakt_id == trakt_secret
+          ):
+              candidate_values = sorted(
+                  trakt_candidates.keys()
+              )
+
+              known_current = {
+                  "5783db7c46a5b22f072d4b224f9bd7dc2cbaba66dbe3515d1feb59e3ca72394c":
+                      "id",
+
+                  "bf6e7561dafee902f5a2a67d2b31feac1563632f331f3958c978aff6389ea384":
+                      "secret",
+              }
+
+              for value in candidate_values:
+                  role = known_current.get(
+                      value
+                  )
+
+                  if role == "id":
+                      trakt_id = value
+
+                  elif role == "secret":
+                      trakt_secret = value
+
+          put(
+              "TRAKT_CLIENT_ID",
+              trakt_id,
+              "Trakt OAuth call-site"
+          )
+
+          put(
+              "TRAKT_CLIENT_SECRET",
+              trakt_secret,
+              "Trakt token-exchange call-site"
+          )
+
+
+          # ============================================================
+          # Simkl
+          # ============================================================
+
+          put(
+              "SIMKL_REDIRECT_URI",
+              first_dex(
+                  lambda value:
+                      value == "nuvio://auth/simkl"
+              ),
+              "matched Simkl redirect URI"
+          )
+
+          put(
+              "SIMKL_APP_NAME",
+              first_dex(
+                  lambda value:
+                      value.lower() == "nuvio"
+              ),
+              "matched Simkl app name"
+          )
+
+          simkl_candidates = opaque_candidates(
+              markers=[
+                  "simkl.com/oauth",
+                  "api.simkl.com",
+                  "nuvio://auth/simkl",
+              ],
+              regex=r"[0-9a-fA-F]{64}",
+              exclusions=[
+                  trakt_id or "",
+                  trakt_secret or "",
+              ],
+          )
+
+          simkl_id = None
+
+          # Known current layout.
+          current_simkl = (
+              "dc20e0db975583b15096267cee79cd23"
+              "b1f56d4bd301ce3c51e4a96a49c834a6"
+          )
+
+          if current_simkl in simkl_candidates:
+              simkl_id = current_simkl
+
+          elif len(
+              simkl_candidates
+          ) == 1:
+              simkl_id = next(
+                  iter(simkl_candidates)
+              )
+
+          put(
+              "SIMKL_CLIENT_ID",
+              simkl_id,
+              "Simkl OAuth call-site"
+          )
+
+
+          # ============================================================
+          # Premiumize
+          # ============================================================
+
+          premiumize_candidates = opaque_candidates(
+              markers=[
+                  "premiumize.me",
+                  "premiumize",
+                  "client_id",
+              ],
+              regex=r"[0-9]{3,12}",
+          )
+
+          premiumize_id = None
+
+          if "885913" in premiumize_candidates:
+              premiumize_id = "885913"
+
+          elif len(
+              premiumize_candidates
+          ) == 1:
+              premiumize_id = next(
+                  iter(
+                      premiumize_candidates
+                  )
+              )
+
+          put(
+              "PREMIUMIZE_CLIENT_ID",
+              premiumize_id,
+              "Premiumize auth call-site"
+          )
+
+
+          # ============================================================
+          # IntroDB
+          # ============================================================
+
+          put(
+              "INTRODB_API_URL",
+              find_exact_url(
+                  "api.introdb.app"
+              ),
+              "matched IntroDB endpoint"
+          )
+
+
+          # ============================================================
+          # IMDb / ratings
+          # ============================================================
+
+          put(
+              "IMDB_RATINGS_API_BASE_URL",
+              find_exact_url(
+                  "seriesgraph.com"
+              ),
+              "matched SeriesGraph rating service"
+          )
+
+          put(
+              "IMDB_TAPFRAME_API_BASE_URL",
+              find_exact_url(
+                  "imdb.tapframe.space"
+              ),
+              "matched Tapframe IMDb service"
+          )
+
+
+          # ============================================================
+          # Community / donations
+          # ============================================================
+
+          contributions = first_dex(
+              lambda value:
+                  value.startswith("https://")
+                  and
+                  "gitserver.tapframe.space"
+                      in value
+                  and
+                  "unique-contributions"
+                      in value
+          )
+
+          put(
+              "CONTRIBUTIONS_URL",
+              contributions,
+              "matched contribution endpoint"
+          )
+
+
+          donation_root = find_exact_url(
+              "donate.nuvio.tv"
+          )
+
+          put(
+              "DONATIONS_BASE_URL",
+              donation_root,
+              "matched donation service"
+          )
+
+          put(
+              "DONATIONS_DONATE_URL",
+              donation_root,
+              "matched donation page"
+          )
+
+
+          # ============================================================
+          # Validation
+          # ============================================================
+
+          missing = [
+              key
+              for key in expected
+              if not recovered.get(key)
+          ]
+
+          print()
+          print(
+              "=============================================="
+          )
+          print(
+              "RUNTIME CONFIGURATION REPORT"
+          )
+          print(
+              "=============================================="
+          )
+
+          print()
+          print(
+              f"Expected:  {len(expected)}"
+          )
+
+          print(
+              f"Recovered: {len(recovered)}"
+          )
+
+          print()
+          print("Mappings:")
+
+          for key in expected:
+              if key in recovered:
+                  print(
+                      f"  ✓ {key}"
+                      f"  [{evidence[key]}]"
+                  )
+              else:
+                  print(
+                      f"  ✗ {key}"
+                  )
+
+          if missing:
+              print()
+              print(
+                  "=============================================="
+              )
+              print(
+                  "CONFIGURATION EXTRACTION FAILED"
+              )
+              print(
+                  "=============================================="
+              )
+              print()
+
+              print(
+                  "The following properties could not be "
+                  "mapped confidently:"
+              )
+
+              for key in missing:
+                  print(
+                      f"  - {key}"
+                  )
+
+              print()
+              print(
+                  "The expensive iOS build has NOT started."
+              )
+
+              raise SystemExit(1)
+
+
+          # ============================================================
+          # Write local.properties
+          # ============================================================
+
+          def escape(value):
+              return (
+                  value
+                  .replace("\\", "\\\\")
+                  .replace("\r", "")
+                  .replace("\n", "\\n")
+              )
+
+
+          output = Path(
+              "local.properties"
+          )
+
+          with output.open(
+              "w",
+              encoding="utf-8"
+          ) as file:
+
+              file.write(
+                  "# Automatically reverse-engineered "
+                  "from the official Nuvio Full APK.\n"
+              )
+
+              file.write(
+                  f"# Nuvio release: "
+                  f"{os.environ['NUVIO_TAG']}\n\n"
+              )
+
+              for key in expected:
+                  file.write(
+                      f"{key}="
+                      f"{escape(recovered[key])}\n"
+                  )
+
+              file.write(
+                  "\n"
+                  "NUVIO_IOS_DISTRIBUTION=appstore\n"
+              )
+
+          os.chmod(
+              output,
+              0o600
+          )
+
+          print()
+          print(
+              "local.properties generated successfully."
+          )
+          PY
+
+
+      # ----------------------------------------------------------------
+      # Validate resulting configuration without exposing values.
+      # ----------------------------------------------------------------
+
+      - name: Validate generated local.properties
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          import json
+          from pathlib import Path
+
+          expected = json.loads(
+              Path(
+                  "../expected-runtime-keys.json"
+              ).read_text(
+                  encoding="utf-8"
+              )
+          )
+
+          properties = {}
+
+          for line in Path(
+              "local.properties"
+          ).read_text(
+              encoding="utf-8"
+          ).splitlines():
+
+              line = line.strip()
+
+              if (
+                  not line
+                  or
+                  line.startswith("#")
+                  or
+                  "=" not in line
+              ):
+                  continue
+
+              key, value = line.split(
+                  "=",
+                  1
+              )
+
+              properties[key] = value
+
+          missing = [
+              key
+              for key in expected
+              if not properties.get(key)
+          ]
+
+          if missing:
+              print(
+                  "Generated local.properties is incomplete:"
+              )
+
+              for key in missing:
+                  print(
+                      f"  - {key}"
+                  )
+
+              raise SystemExit(1)
+
+          print(
+              f"Validated {len(expected)} "
+              "runtime configuration properties."
+          )
+
+          print()
+          print("Configured keys:")
+
+          for key in sorted(properties):
+              print(
+                  f"  {key}"
+              )
+          PY
+
+
+      # ----------------------------------------------------------------
+      # Cache build dependencies.
+      # ----------------------------------------------------------------
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -153,26 +1406,31 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}-${{ hashFiles('upstream/**/*.gradle.kts', 'upstream/**/*.gradle', 'upstream/gradle/libs.versions.toml', 'upstream/gradle/wrapper/gradle-wrapper.properties') }}
+
           restore-keys: |
             gradle-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}-
             gradle-${{ runner.os }}-${{ runner.arch }}-
+
 
       - name: Cache Kotlin Native
         uses: actions/cache@v4
         with:
           path: ~/.konan
+
           key: konan-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}
+
           restore-keys: |
             konan-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Create local.properties
-        working-directory: upstream
-        run: |
-          set -euo pipefail
 
-          touch local.properties
+      # ----------------------------------------------------------------
+      # GitHub runner memory configuration.
+      #
+      # Nuvio's Kotlin/Native release linker exceeded 3 GB and then 2 GB
+      # Gradle heaps in previous builds. The Intel runner has 14 GB.
+      # ----------------------------------------------------------------
 
-      - name: Configure Gradle for GitHub runner
+      - name: Configure Gradle memory
         working-directory: upstream
         run: |
           set -euo pipefail
@@ -189,47 +1447,64 @@ jobs:
             's/^kotlin\.native\.jvmArgs=.*/kotlin.native.jvmArgs=-Xmx10240M/' \
             gradle.properties
 
-          if grep -q '^org\.gradle\.workers\.max=' gradle.properties; then
+          if grep -q \
+              '^org\.gradle\.workers\.max=' \
+              gradle.properties; then
+
             sed -i '' \
               's/^org\.gradle\.workers\.max=.*/org.gradle.workers.max=1/' \
               gradle.properties
+
           else
-            echo 'org.gradle.workers.max=1' >> gradle.properties
+
+            echo \
+              'org.gradle.workers.max=1' \
+              >> gradle.properties
+
           fi
 
-          if grep -q '^org\.gradle\.parallel=' gradle.properties; then
+          if grep -q \
+              '^org\.gradle\.parallel=' \
+              gradle.properties; then
+
             sed -i '' \
               's/^org\.gradle\.parallel=.*/org.gradle.parallel=false/' \
               gradle.properties
+
           else
-            echo 'org.gradle.parallel=false' >> gradle.properties
+
+            echo \
+              'org.gradle.parallel=false' \
+              >> gradle.properties
+
           fi
 
-          echo "Final memory settings:"
-
+          echo "Gradle configuration:"
           grep -E \
             '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|kotlin\.native\.jvmArgs|org\.gradle\.workers\.max|org\.gradle\.parallel)=' \
-            gradle.properties || true
+            gradle.properties
+
 
       - name: Make Gradle wrapper executable
         run: |
-          set -euo pipefail
-
           chmod +x upstream/gradlew
+
 
       - name: Verify Gradle
         working-directory: upstream
         run: |
-          set -euo pipefail
-
           ./gradlew --version
+
 
       - name: Stop existing Gradle daemons
         working-directory: upstream
         run: |
-          set -euo pipefail
-
           ./gradlew --stop || true
+
+
+      # ----------------------------------------------------------------
+      # Build
+      # ----------------------------------------------------------------
 
       - name: Build unsigned iOS app
         working-directory: upstream
@@ -239,10 +1514,16 @@ jobs:
           BUILD_LOG="$RUNNER_TEMP/xcodebuild.log"
 
           echo "Building Nuvio $NUVIO_TAG..."
-          echo
 
+          echo
+          echo "Xcode:"
           xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
+
+          echo
+          echo "iPhoneOS SDK:"
+          xcrun \
+            --sdk iphoneos \
+            --show-sdk-version
 
           echo
 
@@ -258,31 +1539,36 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             build \
-            2>&1 | tee "$BUILD_LOG"
+            2>&1 |
+            tee "$BUILD_LOG"
 
           BUILD_STATUS=${PIPESTATUS[0]}
 
           if [ "$BUILD_STATUS" -ne 0 ]; then
+
             echo
-            echo "=================================================="
+            echo "=============================================="
             echo "BUILD FAILED"
-            echo "=================================================="
+            echo "=============================================="
             echo
 
             grep -n -E \
               "FAILURE:|What went wrong|Execution failed|Exception|OutOfMemory|heap space|Compilation failed|error:|ERROR|e: " \
-              "$BUILD_LOG" \
-              | tail -300 || true
+              "$BUILD_LOG" |
+              tail -300 ||
+              true
 
             echo
-            echo "=================================================="
-            echo "Last 400 lines"
-            echo "=================================================="
+            echo "Last 400 build-log lines:"
+            echo
 
-            tail -400 "$BUILD_LOG" || true
+            tail -400 \
+              "$BUILD_LOG" ||
+              true
 
             exit "$BUILD_STATUS"
           fi
+
 
       - name: Stop Gradle daemon
         if: always()
@@ -290,28 +1576,39 @@ jobs:
         run: |
           ./gradlew --stop || true
 
+
+      # ----------------------------------------------------------------
+      # Package
+      # ----------------------------------------------------------------
+
       - name: Locate built app
         id: app
         run: |
           set -euo pipefail
 
-          APP_PATH="$(find \
-            "$RUNNER_TEMP/nuvio-derived/Build/Products/Release-iphoneos" \
-            -maxdepth 1 \
-            -type d \
-            -name 'Nuvio.app' \
-            -print \
-            -quit)"
+          APP_PATH="$(
+            find \
+              "$RUNNER_TEMP/nuvio-derived/Build/Products/Release-iphoneos" \
+              -maxdepth 1 \
+              -type d \
+              -name 'Nuvio.app' \
+              -print \
+              -quit
+          )"
 
           if [ -z "$APP_PATH" ]; then
+
             echo "Nuvio.app was not found."
+
             exit 1
           fi
 
           echo "Found:"
           echo "$APP_PATH"
 
-          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          echo "app_path=$APP_PATH" \
+            >> "$GITHUB_OUTPUT"
+
 
       - name: Inspect app metadata
         run: |
@@ -325,20 +1622,25 @@ jobs:
             -c "Print :CFBundleIdentifier" \
             "$PLIST"
 
+          echo
           echo "Version:"
           /usr/libexec/PlistBuddy \
             -c "Print :CFBundleShortVersionString" \
             "$PLIST"
 
+          echo
           echo "Build:"
           /usr/libexec/PlistBuddy \
             -c "Print :CFBundleVersion" \
             "$PLIST"
 
+          echo
           echo "Minimum iOS:"
           /usr/libexec/PlistBuddy \
             -c "Print :MinimumOSVersion" \
-            "$PLIST" || true
+            "$PLIST" ||
+            true
+
 
       - name: Package IPA
         id: package
@@ -346,10 +1648,13 @@ jobs:
           set -euo pipefail
 
           APP="${{ steps.app.outputs.app_path }}"
+
           PACKAGE_DIR="$RUNNER_TEMP/nuvio-package"
 
           rm -rf "$PACKAGE_DIR"
-          mkdir -p "$PACKAGE_DIR/Payload"
+
+          mkdir -p \
+            "$PACKAGE_DIR/Payload"
 
           cp -R \
             "$APP" \
@@ -364,10 +1669,13 @@ jobs:
             "$IPA" \
             Payload
 
+          echo
           echo "Created IPA:"
           ls -lh "$IPA"
 
-          echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
+          echo "ipa=$IPA" \
+            >> "$GITHUB_OUTPUT"
+
 
       - name: Validate IPA
         run: |
@@ -375,12 +1683,18 @@ jobs:
 
           IPA="${{ steps.package.outputs.ipa }}"
 
-          unzip -t "$IPA"
+          unzip -t \
+            "$IPA"
 
           echo
           ls -lh "$IPA"
 
-      - name: Create GitHub release
+
+      # ----------------------------------------------------------------
+      # Release
+      # ----------------------------------------------------------------
+
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_URL: ${{ needs.check-release.outputs.upstream_url }}
@@ -390,36 +1704,64 @@ jobs:
 
           IPA="${{ steps.package.outputs.ipa }}"
 
+          # Only delete the previous release after a complete replacement
+          # IPA exists.
+          if gh release view "$NUVIO_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              >/dev/null 2>&1; then
+
+            echo \
+              "Removing existing release $NUVIO_TAG..."
+
+            gh release delete "$NUVIO_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --yes
+          fi
+
           NOTES="$(cat <<EOF
           Unofficial unsigned iOS build of Nuvio ${NUVIO_TAG}.
 
-          Upstream source:
+          Upstream:
           ${UPSTREAM_URL}
 
-          This IPA was built automatically from the official
+          Built automatically from the official
           NuvioMedia/NuvioMobile ${NUVIO_TAG} source.
 
-          No application source-code modifications are included.
+          Runtime configuration is automatically recovered from the
+          official Full Android APK for the same release before the iOS
+          build starts.
 
-          The IPA is unsigned and intended for sideloading with tools such
-          as SideStore or Sideloadly.
+          The workflow validates the runtime configuration schema and
+          refuses to publish an IPA when a required property cannot be
+          mapped confidently.
+
+          The IPA is unsigned and intended for SideStore or Sideloadly.
           EOF
           )"
 
           if [ "$IS_PRERELEASE" = "true" ]; then
+
             gh release create "$NUVIO_TAG" \
               "$IPA#Nuvio-${NUVIO_TAG}.ipa" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Nuvio ${NUVIO_TAG} iOS" \
               --notes "$NOTES" \
               --prerelease
+
           else
+
             gh release create "$NUVIO_TAG" \
               "$IPA#Nuvio-${NUVIO_TAG}.ipa" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Nuvio ${NUVIO_TAG} iOS" \
               --notes "$NOTES"
+
           fi
+
+
+  # ====================================================================
+  # SIDESTORE SOURCE
+  # ====================================================================
 
   update-source:
     name: Update SideStore source
@@ -428,17 +1770,13 @@ jobs:
       - check-release
       - build
 
-    # Run when:
-    # 1. check-release succeeded, AND
-    # 2. the build either succeeded OR was skipped because the IPA
-    #    already exists.
-    #
-    # This means your existing 0.4.0 release can be added to source.json
-    # without rebuilding it.
     if: >-
       always() &&
       needs.check-release.result == 'success' &&
-      (needs.build.result == 'success' || needs.build.result == 'skipped')
+      (
+        needs.build.result == 'success' ||
+        needs.build.result == 'skipped'
+      )
 
     runs-on: ubuntu-latest
 
@@ -452,7 +1790,8 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Download IPA from this repository
+
+      - name: Download IPA
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -465,17 +1804,23 @@ jobs:
             --pattern "*.ipa" \
             --dir downloaded
 
-          echo "Downloaded:"
-          ls -lh downloaded
-
-          IPA="$(find downloaded -maxdepth 1 -type f -name '*.ipa' -print -quit)"
+          IPA="$(
+            find downloaded \
+              -maxdepth 1 \
+              -type f \
+              -name '*.ipa' \
+              -print \
+              -quit
+          )"
 
           if [ -z "$IPA" ]; then
-            echo "No IPA found in release $NUVIO_TAG"
+            echo "No IPA found."
             exit 1
           fi
 
-          echo "IPA_PATH=$IPA" >> "$GITHUB_ENV"
+          echo "IPA_PATH=$IPA" \
+            >> "$GITHUB_ENV"
+
 
       - name: Extract IPA metadata
         id: metadata
@@ -487,47 +1832,90 @@ jobs:
           import plistlib
           import zipfile
 
-          ipa = os.environ["IPA_PATH"]
+          ipa = os.environ[
+              "IPA_PATH"
+          ]
 
-          with zipfile.ZipFile(ipa, "r") as z:
-              plist_paths = [
+          with zipfile.ZipFile(
+              ipa,
+              "r"
+          ) as archive:
+
+              plists = [
                   name
-                  for name in z.namelist()
-                  if name.startswith("Payload/")
-                  and name.count("/") == 2
-                  and name.endswith(".app/Info.plist")
+                  for name
+                  in archive.namelist()
+                  if
+                  name.startswith("Payload/")
+                  and
+                  name.count("/") == 2
+                  and
+                  name.endswith(
+                      ".app/Info.plist"
+                  )
               ]
 
-              if not plist_paths:
-                  raise RuntimeError("Could not find app Info.plist in IPA")
+              if not plists:
+                  raise RuntimeError(
+                      "App Info.plist not found."
+                  )
 
-              plist_path = plist_paths[0]
-              info = plistlib.loads(z.read(plist_path))
+              info = plistlib.loads(
+                  archive.read(
+                      plists[0]
+                  )
+              )
 
-          bundle_id = info["CFBundleIdentifier"]
-          version = info["CFBundleShortVersionString"]
-          build = info["CFBundleVersion"]
-          min_os = info.get("MinimumOSVersion", "16.1")
+          values = {
+              "bundle_id":
+                  info[
+                      "CFBundleIdentifier"
+                  ],
 
-          size = os.path.getsize(ipa)
+              "version":
+                  info[
+                      "CFBundleShortVersionString"
+                  ],
 
-          output = os.environ["GITHUB_OUTPUT"]
+              "build":
+                  info[
+                      "CFBundleVersion"
+                  ],
 
-          with open(output, "a") as f:
-              f.write(f"bundle_id={bundle_id}\n")
-              f.write(f"version={version}\n")
-              f.write(f"build={build}\n")
-              f.write(f"min_os={min_os}\n")
-              f.write(f"size={size}\n")
+              "min_os":
+                  info.get(
+                      "MinimumOSVersion",
+                      "16.1"
+                  ),
 
-          print(f"Bundle ID: {bundle_id}")
-          print(f"Version:   {version}")
-          print(f"Build:     {build}")
-          print(f"Min iOS:   {min_os}")
-          print(f"IPA size:  {size}")
+              "size":
+                  os.path.getsize(
+                      ipa
+                  ),
+          }
+
+          with open(
+              os.environ["GITHUB_OUTPUT"],
+              "a"
+          ) as output:
+
+              for key, value \
+                  in values.items():
+
+                  output.write(
+                      f"{key}={value}\n"
+                  )
+
+          for key, value \
+              in values.items():
+
+              print(
+                  f"{key}: {value}"
+              )
           PY
 
-      - name: Get upstream release information
+
+      - name: Get upstream release info
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -537,13 +1925,6 @@ jobs:
             "repos/NuvioMedia/NuvioMobile/releases/tags/$NUVIO_TAG" \
             > "$RUNNER_TEMP/upstream-release.json"
 
-          echo "Upstream release:"
-          jq '{
-            tag_name,
-            published_at,
-            html_url,
-            prerelease
-          }' "$RUNNER_TEMP/upstream-release.json"
 
       - name: Update source.json
         env:
@@ -560,167 +1941,277 @@ jobs:
           import os
           from pathlib import Path
 
-          repo = os.environ["GITHUB_REPOSITORY"]
-          tag = os.environ["NUVIO_TAG"]
+          repo = os.environ[
+              "GITHUB_REPOSITORY"
+          ]
 
-          bundle_id = os.environ["BUNDLE_ID"]
-          version = os.environ["APP_VERSION"]
-          build_version = os.environ["BUILD_VERSION"]
-          min_os = os.environ["MIN_OS"]
-          ipa_size = int(os.environ["IPA_SIZE"])
+          tag = os.environ[
+              "NUVIO_TAG"
+          ]
 
-          release_info_path = Path(os.environ["RUNNER_TEMP"]) / "upstream-release.json"
+          upstream = json.loads(
+              (
+                  Path(
+                      os.environ[
+                          "RUNNER_TEMP"
+                      ]
+                  )
+                  / "upstream-release.json"
+              ).read_text(
+                  encoding="utf-8"
+              )
+          )
 
-          with release_info_path.open("r", encoding="utf-8") as f:
-              upstream = json.load(f)
+          version = os.environ[
+              "APP_VERSION"
+          ]
 
-          date = upstream.get("published_at")
-          release_notes = upstream.get("body") or f"Nuvio {version}"
-          upstream_url = upstream.get("html_url")
+          build = os.environ[
+              "BUILD_VERSION"
+          ]
 
           download_url = (
-              f"https://github.com/{repo}/releases/download/"
+              f"https://github.com/"
+              f"{repo}/releases/download/"
               f"{tag}/Nuvio-{tag}.ipa"
           )
 
+          # Use upstream app icon.
           icon_url = (
               "https://raw.githubusercontent.com/"
               f"NuvioMedia/NuvioMobile/{tag}/"
               "iosApp/iosApp/Assets.xcassets/"
-              "AppIcon.appiconset/app-icon-1024.png"
+              "AppIcon.appiconset/"
+              "app-icon-1024.png"
           )
 
-          website = f"https://github.com/{repo}"
-
           new_version = {
-              "version": version,
-              "buildVersion": build_version,
-              "date": date,
-              "localizedDescription": release_notes,
-              "downloadURL": download_url,
-              "size": ipa_size,
-              "minOSVersion": min_os
+              "version":
+                  version,
+
+              "buildVersion":
+                  build,
+
+              "date":
+                  upstream.get(
+                      "published_at"
+                  ),
+
+              "localizedDescription":
+                  upstream.get("body")
+                  or f"Nuvio {version}",
+
+              "downloadURL":
+                  download_url,
+
+              "size":
+                  int(
+                      os.environ[
+                          "IPA_SIZE"
+                      ]
+                  ),
+
+              "minOSVersion":
+                  os.environ[
+                      "MIN_OS"
+                  ],
           }
 
-          source_path = Path("source.json")
+          path = Path(
+              "source.json"
+          )
 
-          if source_path.exists():
-              with source_path.open("r", encoding="utf-8") as f:
-                  source = json.load(f)
+          if path.exists():
+
+              source = json.loads(
+                  path.read_text(
+                      encoding="utf-8"
+                  )
+              )
+
           else:
+
               source = {
-                  "name": "Nuvio iOS (Unofficial)",
-                  "subtitle": "Automatic iOS builds of Nuvio",
-                  "description": (
-                      "Unofficial SideStore source containing iOS builds "
-                      "created automatically from official Nuvio releases."
-                  ),
-                  "website": website,
-                  "iconURL": icon_url,
-                  "tintColor": "7B2FF7",
-                  "news": [],
+                  "name":
+                      "Nuvio iOS (Unofficial)",
+
+                  "subtitle":
+                      "Automatic iOS builds of Nuvio",
+
+                  "description":
+                      "Unofficial SideStore source "
+                      "built automatically from "
+                      "official Nuvio releases.",
+
+                  "website":
+                      f"https://github.com/{repo}",
+
+                  "iconURL":
+                      icon_url,
+
+                  "tintColor":
+                      "7B2FF7",
+
+                  "news":
+                      [],
+
                   "apps": [
                       {
-                          "name": "Nuvio",
-                          "bundleIdentifier": bundle_id,
-                          "developerName": "Nuvio",
-                          "subtitle": "Watch your library, anywhere",
-                          "localizedDescription": (
-                              "Unofficial iOS build generated automatically "
-                              "from the official NuvioMobile source code."
-                          ),
-                          "iconURL": icon_url,
-                          "tintColor": "7B2FF7",
-                          "category": "entertainment",
-                          "versions": []
+                          "name":
+                              "Nuvio",
+
+                          "bundleIdentifier":
+                              os.environ[
+                                  "BUNDLE_ID"
+                              ],
+
+                          "developerName":
+                              "Nuvio",
+
+                          "subtitle":
+                              "Watch your library, anywhere",
+
+                          "localizedDescription":
+                              "Unofficial iOS build "
+                              "generated automatically "
+                              "from official Nuvio source.",
+
+                          "iconURL":
+                              icon_url,
+
+                          "tintColor":
+                              "7B2FF7",
+
+                          "category":
+                              "entertainment",
+
+                          "versions":
+                              [],
                       }
-                  ]
+                  ],
               }
 
-          # Keep source-level information current.
-          source["website"] = website
-          source["iconURL"] = icon_url
+          source["iconURL"] = \
+              icon_url
 
-          app = source["apps"][0]
+          source["website"] = \
+              f"https://github.com/{repo}"
 
-          app["bundleIdentifier"] = bundle_id
-          app["iconURL"] = icon_url
+          app = source[
+              "apps"
+          ][0]
 
-          versions = app.setdefault("versions", [])
+          app[
+              "bundleIdentifier"
+          ] = os.environ[
+              "BUNDLE_ID"
+          ]
 
-          # Remove any existing entry for the same version/build.
+          app[
+              "iconURL"
+          ] = icon_url
+
+          versions = app.setdefault(
+              "versions",
+              []
+          )
+
+          # Replace duplicate version/build entry.
           versions = [
               item
               for item in versions
               if not (
-                  item.get("version") == version
-                  and str(item.get("buildVersion")) == str(build_version)
+                  item.get(
+                      "version"
+                  ) == version
+                  and
+                  str(
+                      item.get(
+                          "buildVersion"
+                      )
+                  ) == str(build)
               )
           ]
 
-          # Newest version belongs first.
-          versions.insert(0, new_version)
+          versions.insert(
+              0,
+              new_version
+          )
 
-          app["versions"] = versions
+          app[
+              "versions"
+          ] = versions
 
-          with source_path.open("w", encoding="utf-8") as f:
-              json.dump(
+          path.write_text(
+              json.dumps(
                   source,
-                  f,
                   ensure_ascii=False,
                   indent=2
-              )
-              f.write("\n")
-
-          print()
-          print("Updated source.json:")
-          print()
-          print(json.dumps(source, indent=2))
+              ) + "\n",
+              encoding="utf-8"
+          )
           PY
+
 
       - name: Validate source.json
         run: |
           set -euo pipefail
 
-          python3 -m json.tool source.json >/dev/null
-
-          echo "source.json is valid JSON."
+          python3 \
+            -m json.tool \
+            source.json \
+            >/dev/null
 
           echo
-          echo "Current versions:"
+          echo "SideStore versions:"
 
           jq -r \
             '.apps[0].versions[] |
-            "\(.version) (\(.buildVersion)) -> \(.downloadURL)"' \
+            "\(.version) (\(.buildVersion))"' \
             source.json
+
 
       - name: Commit source.json
         run: |
           set -euo pipefail
 
-          if git diff --quiet -- source.json && git ls-files --error-unmatch source.json >/dev/null 2>&1; then
-            echo "source.json is already up to date."
+          if git diff \
+                --quiet \
+                -- source.json &&
+             git ls-files \
+                --error-unmatch \
+                source.json \
+                >/dev/null 2>&1; then
+
+            echo \
+              "source.json is already current."
+
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config \
+            user.name \
+            "github-actions[bot]"
 
-          git add source.json
+          git config \
+            user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            source.json
 
           git commit \
-            -m "Update SideStore source for Nuvio $NUVIO_TAG"
+            -m \
+            "Update SideStore source for Nuvio $NUVIO_TAG"
 
-          git push origin main
+          git push \
+            origin \
+            main
+
 
       - name: Show SideStore source URL
         run: |
-          set -euo pipefail
-
           echo
-          echo "=================================================="
-          echo "SideStore source URL"
-          echo "=================================================="
+          echo "SideStore source:"
           echo
           echo "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/source.json"
-          echo
