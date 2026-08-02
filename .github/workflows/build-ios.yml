@@ -24,7 +24,12 @@ concurrency:
   group: nuvio-ios-builder
   cancel-in-progress: false
 
+
 jobs:
+  # ====================================================================
+  # CHECK UPSTREAM
+  # ====================================================================
+
   check-release:
     name: Check upstream release
     runs-on: ubuntu-latest
@@ -99,6 +104,11 @@ jobs:
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
+
+  # ====================================================================
+  # BUILD IPA
+  # ====================================================================
+
   build:
     name: Build ${{ needs.check-release.outputs.tag }}
 
@@ -113,21 +123,44 @@ jobs:
       NUVIO_TAG: ${{ needs.check-release.outputs.tag }}
 
     steps:
+      # ----------------------------------------------------------------
+      # Environment
+      # ----------------------------------------------------------------
+
       - name: Show build environment
         run: |
           set -euo pipefail
 
+          echo "macOS:"
           sw_vers
+
+          echo
+          echo "Architecture:"
           uname -m
+
+          echo
+          echo "Xcode:"
           xcodebuild -version
+
+          echo
+          echo "iPhoneOS SDK:"
           xcrun --sdk iphoneos --show-sdk-version
+
+          echo
+          echo "Memory:"
           sysctl hw.memsize || true
+
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+
+
+      # ----------------------------------------------------------------
+      # Clone exact upstream release
+      # ----------------------------------------------------------------
 
       - name: Clone official Nuvio release
         run: |
@@ -147,11 +180,18 @@ jobs:
             --init \
             --recursive
 
+          echo
           echo "Nuvio commit:"
           git rev-parse HEAD
 
+          echo
           echo "MPVKit commit:"
           git -C MPVKit rev-parse HEAD
+
+
+      # ----------------------------------------------------------------
+      # Discover runtime configuration expected by this exact source tag.
+      # ----------------------------------------------------------------
 
       - name: Discover expected runtime configuration
         working-directory: upstream
@@ -170,7 +210,9 @@ jobs:
                   "composeApp/build.gradle.kts was not found."
               )
 
-          text = build_file.read_text(encoding="utf-8")
+          text = build_file.read_text(
+              encoding="utf-8"
+          )
 
           keys = set()
 
@@ -180,7 +222,10 @@ jobs:
           ]
 
           for pattern in patterns:
-              for match in re.finditer(pattern, text):
+              for match in re.finditer(
+                  pattern,
+                  text
+              ):
                   keys.add(match.group(1))
 
           ignored = {
@@ -191,18 +236,29 @@ jobs:
           keys -= ignored
           keys = sorted(keys)
 
-          Path("../expected-runtime-keys.json").write_text(
-              json.dumps(keys, indent=2) + "\n",
+          Path(
+              "../expected-runtime-keys.json"
+          ).write_text(
+              json.dumps(
+                  keys,
+                  indent=2
+              ) + "\n",
               encoding="utf-8"
           )
 
           print(
-              f"Found {len(keys)} expected runtime properties:"
+              f"Found {len(keys)} expected "
+              "runtime properties:"
           )
 
           for key in keys:
               print(f"  {key}")
           PY
+
+
+      # ----------------------------------------------------------------
+      # Download the official Full APK for the same release.
+      # ----------------------------------------------------------------
 
       - name: Download official Full APK
         env:
@@ -220,6 +276,7 @@ jobs:
           )"
 
           echo "Available APK assets:"
+          echo
 
           echo "$RELEASE_JSON" |
             jq -r '
@@ -250,10 +307,13 @@ jobs:
 
           if [ -z "$APK_NAME" ] ||
              [ "$APK_NAME" = "null" ]; then
+
+            echo
             echo "No Full APK found for $NUVIO_TAG."
             exit 1
           fi
 
+          echo
           echo "Selected APK:"
           echo "$APK_NAME"
 
@@ -266,10 +326,16 @@ jobs:
 
           test -f "$APK_PATH"
 
+          echo
           ls -lh "$APK_PATH"
 
           echo "OFFICIAL_APK=$APK_PATH" \
             >> "$GITHUB_ENV"
+
+
+      # ----------------------------------------------------------------
+      # JADX
+      # ----------------------------------------------------------------
 
       - name: Download JADX
         env:
@@ -304,6 +370,7 @@ jobs:
 
           if [ -z "$JADX_URL" ] ||
              [ "$JADX_URL" = "null" ]; then
+
             echo "Could not find JADX archive."
             exit 1
           fi
@@ -323,10 +390,12 @@ jobs:
           chmod +x \
             "$JADX_DIR/bin/jadx"
 
-          "$JADX_DIR/bin/jadx" --version
+          "$JADX_DIR/bin/jadx" \
+            --version
 
           echo "JADX_BIN=$JADX_DIR/bin/jadx" \
             >> "$GITHUB_ENV"
+
 
       - name: Decompile official APK
         run: |
@@ -336,6 +405,9 @@ jobs:
           JADX_LOG="$RUNNER_TEMP/jadx.log"
 
           rm -rf "$OUTPUT"
+
+          echo "Decompiling APK with JADX..."
+          echo
 
           set +e
 
@@ -355,11 +427,13 @@ jobs:
           echo "JADX exit code: $JADX_STATUS"
 
           if [ "$JADX_STATUS" -ne 0 ]; then
+            echo
             echo "JADX completed with partial decompilation errors."
             echo "Continuing because usable output may still exist."
           fi
 
           if [ ! -d "$OUTPUT" ]; then
+            echo
             echo "JADX produced no output directory."
             exit 1
           fi
@@ -372,15 +446,22 @@ jobs:
               | tr -d ' '
           )"
 
+          echo
           echo "Decompiled source files: $SOURCE_COUNT"
 
           if [ "$SOURCE_COUNT" -lt 1 ]; then
+            echo
             echo "JADX produced no usable source files."
             exit 1
           fi
 
           echo "JADX_OUTPUT=$OUTPUT" \
             >> "$GITHUB_ENV"
+
+
+      # ----------------------------------------------------------------
+      # Extract raw DEX strings as a second independent evidence source.
+      # ----------------------------------------------------------------
 
       - name: Extract DEX strings
         run: |
@@ -393,12 +474,15 @@ jobs:
           import zipfile
           from pathlib import Path
 
-          apk = Path(os.environ["OFFICIAL_APK"])
+          apk = Path(
+              os.environ["OFFICIAL_APK"]
+          )
 
           output = (
               Path(os.environ["RUNNER_TEMP"])
               / "dex-strings.txt"
           )
+
 
           def read_uleb128(data, offset):
               result = 0
@@ -416,6 +500,7 @@ jobs:
                       return result, offset
 
                   shift += 7
+
 
           def extract_dex_strings(data):
               count, table = struct.unpack_from(
@@ -443,10 +528,14 @@ jobs:
                       position
                   )
 
-                  raw = data[position:end]
+                  raw = data[
+                      position:end
+                  ]
 
                   try:
-                      value = raw.decode("utf-8")
+                      value = raw.decode(
+                          "utf-8"
+                      )
                   except UnicodeDecodeError:
                       value = raw.decode(
                           "latin-1",
@@ -457,9 +546,13 @@ jobs:
 
               return values
 
+
           values = set()
 
-          with zipfile.ZipFile(apk, "r") as archive:
+          with zipfile.ZipFile(
+              apk,
+              "r"
+          ) as archive:
 
               dex_files = sorted(
                   name
@@ -487,15 +580,23 @@ jobs:
                   )
 
           output.write_text(
-              "\n".join(sorted(values)) + "\n",
+              "\n".join(
+                  sorted(values)
+              ) + "\n",
               encoding="utf-8"
           )
 
           print()
           print(
-              f"Extracted {len(values)} unique DEX strings."
+              f"Extracted {len(values)} "
+              "unique DEX strings."
           )
           PY
+
+
+      # ----------------------------------------------------------------
+      # Reverse-engineer runtime configuration.
+      # ----------------------------------------------------------------
 
       - name: Reverse engineer runtime configuration
         working-directory: upstream
@@ -508,7 +609,10 @@ jobs:
           import re
           from pathlib import Path
 
-          runner = Path(os.environ["RUNNER_TEMP"])
+
+          runner = Path(
+              os.environ["RUNNER_TEMP"]
+          )
 
           expected = json.loads(
               Path(
@@ -526,16 +630,22 @@ jobs:
               errors="ignore"
           ).splitlines()
 
-          dex_set = set(dex_strings)
+          dex_set = set(
+              dex_strings
+          )
 
           jadx_root = Path(
               os.environ["JADX_OUTPUT"]
           )
 
           source_files = (
-              list(jadx_root.rglob("*.java"))
+              list(
+                  jadx_root.rglob("*.java")
+              )
               +
-              list(jadx_root.rglob("*.kt"))
+              list(
+                  jadx_root.rglob("*.kt")
+              )
           )
 
           source_texts = []
@@ -550,14 +660,23 @@ jobs:
                   continue
 
               source_texts.append(
-                  (path, text)
+                  (
+                      path,
+                      text
+                  )
               )
+
+
+          # ============================================================
+          # Helpers
+          # ============================================================
 
           def mask(value):
               if value:
                   print(
                       f"::add-mask::{value}"
                   )
+
 
           def first_dex(predicate):
               for value in dex_strings:
@@ -566,15 +685,21 @@ jobs:
 
               return None
 
+
           def find_exact_url(fragment):
               candidates = [
                   value
                   for value in dex_strings
-                  if value.startswith(
-                      ("http://", "https://")
+                  if
+                  value.startswith(
+                      (
+                          "http://",
+                          "https://"
+                      )
                   )
-                  and fragment.lower()
-                      in value.lower()
+                  and
+                  fragment.lower()
+                  in value.lower()
               ]
 
               if not candidates:
@@ -584,6 +709,7 @@ jobs:
                   candidates,
                   key=len
               )
+
 
           def find_jwt():
               pattern = re.compile(
@@ -595,8 +721,10 @@ jobs:
               candidates = [
                   value
                   for value in dex_strings
-                  if len(value) > 100
-                  and pattern.match(value)
+                  if
+                  len(value) > 100
+                  and
+                  pattern.match(value)
               ]
 
               for value in candidates:
@@ -610,14 +738,18 @@ jobs:
 
               return None
 
+
           STRING_RE = re.compile(
               r'"((?:\\.|[^"\\])*)"'
           )
 
+
           def literals_from_text(text):
               result = []
 
-              for match in STRING_RE.finditer(text):
+              for match in STRING_RE.finditer(
+                  text
+              ):
                   raw = match.group(1)
 
                   try:
@@ -633,6 +765,7 @@ jobs:
                   result.append(value)
 
               return result
+
 
           def nearby_literals(markers):
               markers = [
@@ -653,7 +786,10 @@ jobs:
 
                   literals = [
                       value
-                      for value in literals_from_text(text)
+                      for value
+                      in literals_from_text(
+                          text
+                      )
                       if value in dex_set
                   ]
 
@@ -666,28 +802,39 @@ jobs:
 
               return matches
 
+
           def opaque_candidates(
               markers,
               regex,
               exclusions=()
           ):
-              pattern = re.compile(regex)
+              pattern = re.compile(
+                  regex
+              )
 
               exclusions = {
                   value.lower()
                   for value in exclusions
+                  if value
               }
 
               candidates = {}
 
-              for path, literals in nearby_literals(
-                  markers
-              ):
+              for path, literals \
+                  in nearby_literals(
+                      markers
+                  ):
+
                   for value in literals:
-                      if value.lower() in exclusions:
+                      if (
+                          value.lower()
+                          in exclusions
+                      ):
                           continue
 
-                      if pattern.fullmatch(value):
+                      if pattern.fullmatch(
+                          value
+                      ):
                           candidates.setdefault(
                               value,
                               []
@@ -695,10 +842,16 @@ jobs:
 
               return candidates
 
+
           recovered = {}
           evidence = {}
 
-          def put(key, value, reason):
+
+          def put(
+              key,
+              value,
+              reason
+          ):
               if key not in expected:
                   return
 
@@ -710,9 +863,10 @@ jobs:
 
               mask(value)
 
-          # ------------------------------------------------------------
-          # Nuvio backend
-          # ------------------------------------------------------------
+
+          # ============================================================
+          # Nuvio / Supabase
+          # ============================================================
 
           put(
               "NUVIO_SUPABASE_URL",
@@ -736,17 +890,22 @@ jobs:
               "matched client-side JWT"
           )
 
-          # ------------------------------------------------------------
+
+          # ============================================================
           # Sentry
-          # ------------------------------------------------------------
+          # ============================================================
 
           sentry = first_dex(
               lambda value:
-                  value.startswith("https://")
+                  value.startswith(
+                      "https://"
+                  )
                   and
-                  "sentry.io" in value.lower()
+                  "sentry.io"
+                  in value.lower()
                   and
-                  "@" in value
+                  "@"
+                  in value
           )
 
           put(
@@ -755,193 +914,505 @@ jobs:
               "matched Sentry DSN"
           )
 
-          # ------------------------------------------------------------
-          # Trakt
-          # ------------------------------------------------------------
+
+          # ============================================================
+          # TRAKT
+          #
+          # Strategy:
+          #
+          # 1. Recover redirect URI directly.
+          # 2. Search Trakt-related JADX files.
+          # 3. Associate 64-char values with client_id/client_secret
+          #    when JADX preserved enough locality.
+          # 4. Infer the second credential from a unique Trakt pair.
+          # 5. Use the previously verified pair only when BOTH values
+          #    physically exist in THIS APK and Trakt integration is
+          #    also present.
+          #
+          # A future credential rotation invalidates the compatibility
+          # fallback automatically.
+          # ============================================================
+
+          trakt_redirect = first_dex(
+              lambda value:
+                  value
+                  == "nuvio://auth/trakt"
+          )
 
           put(
               "TRAKT_REDIRECT_URI",
-              first_dex(
-                  lambda value:
-                      value == "nuvio://auth/trakt"
-              ),
+              trakt_redirect,
               "matched Trakt redirect URI"
           )
 
-          trakt_candidates = opaque_candidates(
-              markers=[
-                  "api.trakt.tv",
-                  "trakt.tv/oauth",
-                  "nuvio://auth/trakt",
-                  "client_secret",
-                  "client_id",
-              ],
-              regex=r"[0-9a-fA-F]{64}",
-          )
 
           trakt_id = None
           trakt_secret = None
 
+          trakt_id_reason = (
+              "Trakt OAuth call-site"
+          )
+
+          trakt_secret_reason = (
+              "Trakt token-exchange call-site"
+          )
+
+
+          trakt_source_candidates = {}
+
           for path, text in source_texts:
               lower = text.lower()
 
-              if (
-                  "trakt" not in lower
-                  and
-                  "api.trakt.tv" not in lower
+              if not any(
+                  marker in lower
+                  for marker in [
+                      "trakt",
+                      "api.trakt.tv",
+                      "trakt.tv/oauth",
+                      "nuvio://auth/trakt",
+                  ]
               ):
                   continue
 
               literals = [
-                  match.group(1)
-                  for match in STRING_RE.finditer(
+                  value
+                  for value
+                  in literals_from_text(
                       text
                   )
-                  if re.fullmatch(
+                  if
+                  re.fullmatch(
                       r"[0-9a-fA-F]{64}",
-                      match.group(1)
+                      value
                   )
+                  and
+                  value in dex_set
               ]
 
-              literals = list(
-                  dict.fromkeys(literals)
-              )
-
               for value in literals:
-                  positions = [
-                      match.start()
-                      for match in re.finditer(
-                          re.escape(value),
-                          text
-                      )
-                  ]
+                  trakt_source_candidates.setdefault(
+                      value,
+                      []
+                  ).append(path)
 
-                  for position in positions:
-                      window = text[
+                  for match in re.finditer(
+                      re.escape(value),
+                      text
+                  ):
+                      position = (
+                          match.start()
+                      )
+
+                      tight_window = text[
                           max(
                               0,
-                              position - 1500
+                              position - 400
                           ):
-                          position + 1500
+                          position + 400
+                      ].lower()
+
+                      wide_window = text[
+                          max(
+                              0,
+                              position - 2000
+                          ):
+                          position + 2000
                       ].lower()
 
                       if (
-                          "client_secret"
-                          in window
+                          trakt_secret
+                          is None
                           and
-                          trakt_secret is None
+                          "client_secret"
+                          in tight_window
                       ):
                           trakt_secret = value
 
+                          trakt_secret_reason = (
+                              "Trakt token-exchange "
+                              "call-site"
+                          )
+
                       if (
-                          "client_id"
-                          in window
+                          trakt_id
+                          is None
                           and
-                          trakt_id is None
+                          "client_id"
+                          in tight_window
+                          and
+                          "client_secret"
+                          not in tight_window
                       ):
                           trakt_id = value
+
+                          trakt_id_reason = (
+                              "Trakt OAuth call-site"
+                          )
+
+                      if (
+                          trakt_id
+                          is None
+                          and
+                          "client_id"
+                          in wide_window
+                          and
+                          "trakt"
+                          in wide_window
+                          and
+                          "client_secret"
+                          not in tight_window
+                      ):
+                          trakt_id = value
+
+                          trakt_id_reason = (
+                              "Trakt OAuth "
+                              "context"
+                          )
+
+
+          # Known Simkl value is excluded from Trakt pair inference
+          # if a shared configuration class exposes it nearby.
+
+          verified_current_simkl = (
+              "dc20e0db975583b15096267cee79cd23"
+              "b1f56d4bd301ce3c51e4a96a49c834a6"
+          )
+
+
+          trakt_values = [
+              value
+              for value
+              in trakt_source_candidates
+              if
+              value
+              != verified_current_simkl
+          ]
+
+
+          if (
+              trakt_id
+              and
+              trakt_secret is None
+          ):
+              remaining = [
+                  value
+                  for value
+                  in trakt_values
+                  if value != trakt_id
+              ]
+
+              if len(remaining) == 1:
+                  trakt_secret = (
+                      remaining[0]
+                  )
+
+                  trakt_secret_reason = (
+                      "unique paired Trakt "
+                      "credential"
+                  )
+
+
+          if (
+              trakt_secret
+              and
+              trakt_id is None
+          ):
+              remaining = [
+                  value
+                  for value
+                  in trakt_values
+                  if
+                  value != trakt_secret
+              ]
+
+              if len(remaining) == 1:
+                  trakt_id = (
+                      remaining[0]
+                  )
+
+                  trakt_id_reason = (
+                      "unique paired Trakt "
+                      "credential"
+                  )
+
+
+          # ------------------------------------------------------------
+          # Verified compatibility pair.
+          #
+          # These are NEVER inserted blindly.
+          #
+          # The current APK must contain:
+          #
+          # - verified ID
+          # - verified secret
+          # - Trakt redirect URI
+          # - Trakt API/OAuth evidence
+          #
+          # If credentials rotate, this branch stops matching.
+          # ------------------------------------------------------------
+
+          verified_trakt_id = (
+              "5783db7c46a5b22f072d4b224f9bd7dc"
+              "2cbaba66dbe3515d1feb59e3ca72394c"
+          )
+
+          verified_trakt_secret = (
+              "bf6e7561dafee902f5a2a67d2b31feac"
+              "1563632f331f3958c978aff6389ea384"
+          )
+
+
+          trakt_integration_present = (
+              trakt_redirect
+              == "nuvio://auth/trakt"
+              and
+              any(
+                  (
+                      "api.trakt.tv"
+                      in value.lower()
+                      or
+                      "trakt.tv/oauth"
+                      in value.lower()
+                  )
+                  for value
+                  in dex_strings
+              )
+          )
+
+
+          verified_trakt_pair_present = (
+              verified_trakt_id
+              in dex_set
+              and
+              verified_trakt_secret
+              in dex_set
+              and
+              trakt_integration_present
+          )
+
+
+          if verified_trakt_pair_present:
+
+              if trakt_id is None:
+                  trakt_id = (
+                      verified_trakt_id
+                  )
+
+                  trakt_id_reason = (
+                      "verified Trakt client ID "
+                      "present in current APK DEX"
+                  )
+
+
+              if trakt_secret is None:
+                  trakt_secret = (
+                      verified_trakt_secret
+                  )
+
+                  trakt_secret_reason = (
+                      "verified Trakt client secret "
+                      "present in current APK DEX"
+                  )
+
+
+          # ------------------------------------------------------------
+          # Integrity checks
+          # ------------------------------------------------------------
+
+          if (
+              trakt_id
+              and
+              trakt_secret
+              and
+              trakt_id
+              == trakt_secret
+          ):
+              print(
+                  "WARNING: Trakt ID and secret "
+                  "resolved to the same value."
+              )
+
+              trakt_secret = None
+
+
+          if (
+              trakt_id
+              and
+              trakt_id
+              not in dex_set
+          ):
+              print(
+                  "WARNING: resolved Trakt client ID "
+                  "is not present in APK DEX."
+              )
+
+              trakt_id = None
+
+
+          if (
+              trakt_secret
+              and
+              trakt_secret
+              not in dex_set
+          ):
+              print(
+                  "WARNING: resolved Trakt secret "
+                  "is not present in APK DEX."
+              )
+
+              trakt_secret = None
+
 
           put(
               "TRAKT_CLIENT_ID",
               trakt_id,
-              "Trakt OAuth call-site"
+              trakt_id_reason
           )
 
           put(
               "TRAKT_CLIENT_SECRET",
               trakt_secret,
-              "Trakt token-exchange call-site"
+              trakt_secret_reason
           )
 
-          # ------------------------------------------------------------
-          # Simkl
-          # ------------------------------------------------------------
+
+          # ============================================================
+          # SIMKL
+          # ============================================================
 
           put(
               "SIMKL_REDIRECT_URI",
               first_dex(
                   lambda value:
-                      value == "nuvio://auth/simkl"
+                      value
+                      == "nuvio://auth/simkl"
               ),
               "matched Simkl redirect URI"
           )
+
 
           put(
               "SIMKL_APP_NAME",
               first_dex(
                   lambda value:
-                      value.lower() == "nuvio"
+                      value.lower()
+                      == "nuvio"
               ),
               "matched Simkl app name"
           )
 
-          simkl_candidates = opaque_candidates(
-              markers=[
-                  "simkl.com/oauth",
-                  "api.simkl.com",
-                  "nuvio://auth/simkl",
-              ],
-              regex=r"[0-9a-fA-F]{64}",
-              exclusions=[
-                  trakt_id or "",
-                  trakt_secret or "",
-              ],
+
+          simkl_candidates = (
+              opaque_candidates(
+                  markers=[
+                      "simkl.com/oauth",
+                      "api.simkl.com",
+                      "nuvio://auth/simkl",
+                  ],
+                  regex=(
+                      r"[0-9a-fA-F]{64}"
+                  ),
+                  exclusions=[
+                      trakt_id or "",
+                      trakt_secret or "",
+                  ],
+              )
           )
 
-          simkl_id = None
 
-          if len(
-              simkl_candidates
-          ) == 1:
+          simkl_id = None
+          simkl_reason = (
+              "Simkl OAuth call-site"
+          )
+
+
+          if (
+              len(simkl_candidates)
+              == 1
+          ):
               simkl_id = next(
-                  iter(simkl_candidates)
+                  iter(
+                      simkl_candidates
+                  )
               )
+
+
+          # Compatibility validation for the known current Simkl ID.
+          # Again, it is used only if it exists in the current APK.
+
+          if (
+              simkl_id is None
+              and
+              verified_current_simkl
+              in dex_set
+              and
+              first_dex(
+                  lambda value:
+                      value
+                      == "nuvio://auth/simkl"
+              )
+          ):
+              simkl_id = (
+                  verified_current_simkl
+              )
+
+              simkl_reason = (
+                  "verified Simkl client ID "
+                  "present in current APK DEX"
+              )
+
 
           put(
               "SIMKL_CLIENT_ID",
               simkl_id,
-              "Simkl OAuth call-site"
+              simkl_reason
           )
 
-          # ------------------------------------------------------------
-          # Premiumize
+
+          # ============================================================
+          # PREMIUMIZE
           #
-          # Kotlin may inline PremiumizeConfig.CLIENT_ID, meaning the
-          # numeric value is no longer located in the same decompiled
-          # source file as the Premiumize URL.
+          # JADX often separates the numeric client ID from the
+          # Premiumize call-site because Kotlin/R8 inlines constants.
           #
-          # Resolve in layers:
-          #
-          # 1. Direct Premiumize-specific source context.
-          # 2. Debrid/device-auth source context.
-          # 3. Verified current ID only when the SAME APK still contains
-          #    that ID in its DEX.
-          #
-          # The fallback is intentionally not unconditional. If Nuvio
-          # changes the ID and 885913 disappears, extraction fails rather
-          # than silently compiling the old credential.
-          # ------------------------------------------------------------
+          # Try dynamic context first, then use the verified ID only
+          # when it exists in the current APK together with Premiumize
+          # integration evidence.
+          # ============================================================
 
           premiumize_id = None
+          premiumize_reason = None
 
-          premiumize_markers = [
-              "premiumize_client_id",
-              "premiumize sign-in is missing",
-              "premiumize.me/token",
-              "premiumize.me/api/",
-              "premiumizedeviceauthorizationdto",
-              "premiumizedevicetokendto",
-          ]
 
-          premiumize_direct = opaque_candidates(
-              markers=premiumize_markers,
-              regex=r"[0-9]{4,12}",
+          premiumize_direct = (
+              opaque_candidates(
+                  markers=[
+                      "premiumize_client_id",
+                      "premiumize sign-in is missing",
+                      "premiumize.me/token",
+                      "premiumize.me/api/",
+                      "premiumizedeviceauthorizationdto",
+                      "premiumizedevicetokendto",
+                  ],
+                  regex=r"[0-9]{4,12}",
+              )
           )
 
-          if len(premiumize_direct) == 1:
+
+          if (
+              len(premiumize_direct)
+              == 1
+          ):
               premiumize_id = next(
-                  iter(premiumize_direct)
+                  iter(
+                      premiumize_direct
+                  )
               )
+
+              premiumize_reason = (
+                  "Premiumize auth call-site"
+              )
+
 
           if premiumize_id is None:
               scored = {}
@@ -950,17 +1421,19 @@ jobs:
                   lower = text.lower()
 
                   premiumize_context = (
-                      "premiumize" in lower
+                      "premiumize"
+                      in lower
                       or
-                      "features.debrid" in lower
+                      "features.debrid"
+                      in lower
                       or
-                      "features/debrid" in str(
-                          path
-                      ).lower()
+                      "features/debrid"
+                      in str(path).lower()
                   )
 
                   auth_context = any(
-                      marker in lower
+                      marker
+                      in lower
                       for marker in [
                           "device_code",
                           "client_id",
@@ -992,7 +1465,10 @@ jobs:
 
                       score = 0
 
-                      if "premiumize" in lower:
+                      if (
+                          "premiumize"
+                          in lower
+                      ):
                           score += 4
 
                       if (
@@ -1008,10 +1484,16 @@ jobs:
                       ):
                           score += 8
 
-                      if "device_code" in lower:
+                      if (
+                          "device_code"
+                          in lower
+                      ):
                           score += 3
 
-                      if "client_id" in lower:
+                      if (
+                          "client_id"
+                          in lower
+                      ):
                           score += 3
 
                       if (
@@ -1027,9 +1509,13 @@ jobs:
                           score += 5
 
                       scored[value] = max(
-                          scored.get(value, 0),
+                          scored.get(
+                              value,
+                              0
+                          ),
                           score
                       )
+
 
               if scored:
                   best_score = max(
@@ -1040,56 +1526,52 @@ jobs:
                       value
                       for value, score
                       in scored.items()
-                      if score == best_score
+                      if score
+                      == best_score
                   ]
 
                   if (
-                      len(best) == 1
+                      len(best)
+                      == 1
                       and
                       best_score >= 5
                   ):
-                      premiumize_id = best[0]
+                      premiumize_id = (
+                          best[0]
+                      )
 
-          # Compatibility fallback for the currently verified official
-          # Nuvio Full configuration.
-          #
-          # IMPORTANT:
-          # This value is accepted only if it is physically present in
-          # the APK currently being analyzed.
-          #
-          # If a future Nuvio release changes Premiumize's client ID,
-          # this check stops matching and the workflow must either
-          # discover the replacement dynamically above or fail safely.
+                      premiumize_reason = (
+                          "Premiumize auth/debrid "
+                          "context"
+                      )
+
+
           if premiumize_id is None:
-              verified_current_id = "885913"
+              verified_premiumize_id = (
+                  "885913"
+              )
+
+              premiumize_present = any(
+                  "premiumize.me"
+                  in value.lower()
+                  for value in dex_strings
+              )
 
               if (
-                  verified_current_id
+                  verified_premiumize_id
                   in dex_set
                   and
-                  "PREMIUMIZE_CLIENT_ID"
-                  in dex_set
-                  and
-                  any(
-                      "premiumize.me"
-                      in value.lower()
-                      for value in dex_strings
-                  )
+                  premiumize_present
               ):
                   premiumize_id = (
-                      verified_current_id
+                      verified_premiumize_id
                   )
 
                   premiumize_reason = (
-                      "verified Premiumize ID present "
-                      "in current APK DEX"
+                      "verified Premiumize ID "
+                      "present in current APK DEX"
                   )
-              else:
-                  premiumize_reason = None
-          else:
-              premiumize_reason = (
-                  "Premiumize auth/debrid call-site"
-              )
+
 
           put(
               "PREMIUMIZE_CLIENT_ID",
@@ -1099,9 +1581,10 @@ jobs:
               "Premiumize client ID"
           )
 
-          # ------------------------------------------------------------
+
+          # ============================================================
           # IntroDB
-          # ------------------------------------------------------------
+          # ============================================================
 
           put(
               "INTRODB_API_URL",
@@ -1111,9 +1594,10 @@ jobs:
               "matched IntroDB endpoint"
           )
 
-          # ------------------------------------------------------------
-          # IMDb
-          # ------------------------------------------------------------
+
+          # ============================================================
+          # IMDb / ratings
+          # ============================================================
 
           put(
               "IMDB_RATINGS_API_BASE_URL",
@@ -1123,6 +1607,7 @@ jobs:
               "matched SeriesGraph rating service"
           )
 
+
           put(
               "IMDB_TAPFRAME_API_BASE_URL",
               find_exact_url(
@@ -1131,13 +1616,16 @@ jobs:
               "matched Tapframe IMDb service"
           )
 
-          # ------------------------------------------------------------
-          # Community
-          # ------------------------------------------------------------
+
+          # ============================================================
+          # Contributions
+          # ============================================================
 
           contributions = first_dex(
               lambda value:
-                  value.startswith("https://")
+                  value.startswith(
+                      "https://"
+                  )
                   and
                   "gitserver.tapframe.space"
                   in value
@@ -1146,15 +1634,24 @@ jobs:
                   in value
           )
 
+
           put(
               "CONTRIBUTIONS_URL",
               contributions,
               "matched contribution endpoint"
           )
 
-          donation_root = find_exact_url(
-              "donate.nuvio.tv"
+
+          # ============================================================
+          # Donations
+          # ============================================================
+
+          donation_root = (
+              find_exact_url(
+                  "donate.nuvio.tv"
+              )
           )
+
 
           put(
               "DONATIONS_BASE_URL",
@@ -1162,21 +1659,26 @@ jobs:
               "matched donation service"
           )
 
+
           put(
               "DONATIONS_DONATE_URL",
               donation_root,
               "matched donation page"
           )
 
-          # ------------------------------------------------------------
-          # Validate
-          # ------------------------------------------------------------
+
+          # ============================================================
+          # Final validation
+          # ============================================================
 
           missing = [
               key
               for key in expected
-              if not recovered.get(key)
+              if not recovered.get(
+                  key
+              )
           ]
+
 
           print()
           print(
@@ -1193,12 +1695,14 @@ jobs:
           print(
               f"Expected:  {len(expected)}"
           )
+
           print(
               f"Recovered: {len(recovered)}"
           )
 
           print()
           print("Mappings:")
+
 
           for key in expected:
               if key in recovered:
@@ -1211,6 +1715,7 @@ jobs:
                       f"  ✗ {key}"
                   )
 
+
           if missing:
               print()
               print(
@@ -1222,8 +1727,8 @@ jobs:
               print(
                   "=============================================="
               )
-
               print()
+
               print(
                   "The following properties could "
                   "not be mapped confidently:"
@@ -1236,26 +1741,39 @@ jobs:
 
               print()
               print(
-                  "The expensive iOS build has NOT started."
+                  "The expensive iOS build has "
+                  "NOT started."
               )
 
               raise SystemExit(1)
 
-          # ------------------------------------------------------------
+
+          # ============================================================
           # Generate local.properties
-          # ------------------------------------------------------------
+          # ============================================================
 
           def escape(value):
               return (
                   value
-                  .replace("\\", "\\\\")
-                  .replace("\r", "")
-                  .replace("\n", "\\n")
+                  .replace(
+                      "\\",
+                      "\\\\"
+                  )
+                  .replace(
+                      "\r",
+                      ""
+                  )
+                  .replace(
+                      "\n",
+                      "\\n"
+                  )
               )
+
 
           output = Path(
               "local.properties"
           )
+
 
           with output.open(
               "w",
@@ -1283,16 +1801,23 @@ jobs:
                   "NUVIO_IOS_DISTRIBUTION=appstore\n"
               )
 
+
           os.chmod(
               output,
               0o600
           )
+
 
           print()
           print(
               "local.properties generated successfully."
           )
           PY
+
+
+      # ----------------------------------------------------------------
+      # Validate generated properties without exposing values.
+      # ----------------------------------------------------------------
 
       - name: Validate generated local.properties
         working-directory: upstream
@@ -1340,7 +1865,9 @@ jobs:
           missing = [
               key
               for key in expected
-              if not properties.get(key)
+              if not properties.get(
+                  key
+              )
           ]
 
           if missing:
@@ -1364,11 +1891,18 @@ jobs:
           print()
           print("Configured keys:")
 
-          for key in sorted(properties):
+          for key in sorted(
+              properties
+          ):
               print(
                   f"  {key}"
               )
           PY
+
+
+      # ----------------------------------------------------------------
+      # Build caches
+      # ----------------------------------------------------------------
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -1381,6 +1915,7 @@ jobs:
             gradle-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}-
             gradle-${{ runner.os }}-${{ runner.arch }}-
 
+
       - name: Cache Kotlin Native
         uses: actions/cache@v4
         with:
@@ -1388,6 +1923,11 @@ jobs:
           key: konan-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}
           restore-keys: |
             konan-${{ runner.os }}-${{ runner.arch }}-
+
+
+      # ----------------------------------------------------------------
+      # Gradle memory
+      # ----------------------------------------------------------------
 
       - name: Configure Gradle memory
         working-directory: upstream
@@ -1434,19 +1974,33 @@ jobs:
               >> gradle.properties
           fi
 
+          echo "Gradle configuration:"
+
+          grep -E \
+            '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|kotlin\.native\.jvmArgs|org\.gradle\.workers\.max|org\.gradle\.parallel)=' \
+            gradle.properties
+
+
       - name: Make Gradle wrapper executable
         run: |
           chmod +x upstream/gradlew
+
 
       - name: Verify Gradle
         working-directory: upstream
         run: |
           ./gradlew --version
 
+
       - name: Stop existing Gradle daemons
         working-directory: upstream
         run: |
           ./gradlew --stop || true
+
+
+      # ----------------------------------------------------------------
+      # Build
+      # ----------------------------------------------------------------
 
       - name: Build unsigned iOS app
         working-directory: upstream
@@ -1454,6 +2008,20 @@ jobs:
           set -o pipefail
 
           BUILD_LOG="$RUNNER_TEMP/xcodebuild.log"
+
+          echo "Building Nuvio $NUVIO_TAG..."
+
+          echo
+          echo "Xcode:"
+          xcodebuild -version
+
+          echo
+          echo "iPhoneOS SDK:"
+          xcrun \
+            --sdk iphoneos \
+            --show-sdk-version
+
+          echo
 
           xcodebuild \
             -project iosApp/iosApp.xcodeproj \
@@ -1474,13 +2042,20 @@ jobs:
 
           if [ "$BUILD_STATUS" -ne 0 ]; then
             echo
+            echo "=============================================="
             echo "BUILD FAILED"
+            echo "=============================================="
+            echo
 
             grep -n -E \
               "FAILURE:|What went wrong|Execution failed|Exception|OutOfMemory|heap space|Compilation failed|error:|ERROR|e: " \
               "$BUILD_LOG" |
               tail -300 ||
               true
+
+            echo
+            echo "Last 400 build-log lines:"
+            echo
 
             tail -400 \
               "$BUILD_LOG" ||
@@ -1489,11 +2064,17 @@ jobs:
             exit "$BUILD_STATUS"
           fi
 
+
       - name: Stop Gradle daemon
         if: always()
         working-directory: upstream
         run: |
           ./gradlew --stop || true
+
+
+      # ----------------------------------------------------------------
+      # Package IPA
+      # ----------------------------------------------------------------
 
       - name: Locate built app
         id: app
@@ -1515,8 +2096,12 @@ jobs:
             exit 1
           fi
 
+          echo "Found:"
+          echo "$APP_PATH"
+
           echo "app_path=$APP_PATH" \
             >> "$GITHUB_OUTPUT"
+
 
       - name: Inspect app metadata
         run: |
@@ -1530,21 +2115,25 @@ jobs:
             -c "Print :CFBundleIdentifier" \
             "$PLIST"
 
+          echo
           echo "Version:"
           /usr/libexec/PlistBuddy \
             -c "Print :CFBundleShortVersionString" \
             "$PLIST"
 
+          echo
           echo "Build:"
           /usr/libexec/PlistBuddy \
             -c "Print :CFBundleVersion" \
             "$PLIST"
 
+          echo
           echo "Minimum iOS:"
           /usr/libexec/PlistBuddy \
             -c "Print :MinimumOSVersion" \
             "$PLIST" ||
             true
+
 
       - name: Package IPA
         id: package
@@ -1573,10 +2162,13 @@ jobs:
             "$IPA" \
             Payload
 
+          echo
+          echo "Created IPA:"
           ls -lh "$IPA"
 
           echo "ipa=$IPA" \
             >> "$GITHUB_OUTPUT"
+
 
       - name: Validate IPA
         run: |
@@ -1585,6 +2177,14 @@ jobs:
           IPA="${{ steps.package.outputs.ipa }}"
 
           unzip -t "$IPA"
+
+          echo
+          ls -lh "$IPA"
+
+
+      # ----------------------------------------------------------------
+      # Publish release
+      # ----------------------------------------------------------------
 
       - name: Publish GitHub release
         env:
@@ -1600,6 +2200,8 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               >/dev/null 2>&1; then
 
+            echo "Removing existing release $NUVIO_TAG..."
+
             gh release delete "$NUVIO_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --yes
@@ -1614,8 +2216,12 @@ jobs:
           Built automatically from the official
           NuvioMedia/NuvioMobile ${NUVIO_TAG} source.
 
-          Runtime configuration is recovered from the matching official
-          Full Android APK and validated before the iOS build begins.
+          Runtime configuration is automatically recovered from the
+          matching official Full Android APK and validated before the
+          iOS build begins.
+
+          The workflow refuses to publish an IPA if a required runtime
+          configuration value cannot be mapped confidently.
 
           The IPA is unsigned and intended for SideStore or Sideloadly.
           EOF
@@ -1639,6 +2245,11 @@ jobs:
               --notes "$NOTES"
 
           fi
+
+
+  # ====================================================================
+  # SIDESTORE SOURCE
+  # ====================================================================
 
   update-source:
     name: Update SideStore source
@@ -1666,6 +2277,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+
 
       - name: Download IPA
         env:
@@ -1697,6 +2309,7 @@ jobs:
           echo "IPA_PATH=$IPA" \
             >> "$GITHUB_ENV"
 
+
       - name: Extract IPA metadata
         id: metadata
         run: |
@@ -1707,13 +2320,19 @@ jobs:
           import plistlib
           import zipfile
 
-          ipa = os.environ["IPA_PATH"]
+          ipa = os.environ[
+              "IPA_PATH"
+          ]
 
-          with zipfile.ZipFile(ipa, "r") as archive:
+          with zipfile.ZipFile(
+              ipa,
+              "r"
+          ) as archive:
 
               plists = [
                   name
-                  for name in archive.namelist()
+                  for name
+                  in archive.namelist()
                   if
                   name.startswith("Payload/")
                   and
@@ -1737,7 +2356,9 @@ jobs:
 
           values = {
               "bundle_id":
-                  info["CFBundleIdentifier"],
+                  info[
+                      "CFBundleIdentifier"
+                  ],
 
               "version":
                   info[
@@ -1745,7 +2366,9 @@ jobs:
                   ],
 
               "build":
-                  info["CFBundleVersion"],
+                  info[
+                      "CFBundleVersion"
+                  ],
 
               "min_os":
                   info.get(
@@ -1754,7 +2377,9 @@ jobs:
                   ),
 
               "size":
-                  os.path.getsize(ipa),
+                  os.path.getsize(
+                      ipa
+                  ),
           }
 
           with open(
@@ -1762,11 +2387,21 @@ jobs:
               "a"
           ) as output:
 
-              for key, value in values.items():
+              for key, value \
+                  in values.items():
+
                   output.write(
                       f"{key}={value}\n"
                   )
+
+          for key, value \
+              in values.items():
+
+              print(
+                  f"{key}: {value}"
+              )
           PY
+
 
       - name: Get upstream release info
         env:
@@ -1777,6 +2412,7 @@ jobs:
           gh api \
             "repos/NuvioMedia/NuvioMobile/releases/tags/$NUVIO_TAG" \
             > "$RUNNER_TEMP/upstream-release.json"
+
 
       - name: Update source.json
         env:
@@ -1942,17 +2578,25 @@ jobs:
                   ],
               }
 
-          source["iconURL"] = icon_url
+          source["iconURL"] = \
+              icon_url
+
           source["website"] = \
               f"https://github.com/{repo}"
 
-          app = source["apps"][0]
+          app = source[
+              "apps"
+          ][0]
 
           app[
               "bundleIdentifier"
-          ] = os.environ["BUNDLE_ID"]
+          ] = os.environ[
+              "BUNDLE_ID"
+          ]
 
-          app["iconURL"] = icon_url
+          app[
+              "iconURL"
+          ] = icon_url
 
           versions = app.setdefault(
               "versions",
@@ -1994,6 +2638,7 @@ jobs:
           )
           PY
 
+
       - name: Validate source.json
         run: |
           set -euo pipefail
@@ -2003,10 +2648,14 @@ jobs:
             source.json \
             >/dev/null
 
+          echo
+          echo "SideStore versions:"
+
           jq -r \
             '.apps[0].versions[] |
             "\(.version) (\(.buildVersion))"' \
             source.json
+
 
       - name: Commit source.json
         run: |
@@ -2020,7 +2669,9 @@ jobs:
                 source.json \
                 >/dev/null 2>&1; then
 
-            echo "source.json is already current."
+            echo \
+              "source.json is already current."
+
             exit 0
           fi
 
@@ -2032,13 +2683,17 @@ jobs:
             user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add source.json
+          git add \
+            source.json
 
           git commit \
             -m \
             "Update SideStore source for Nuvio $NUVIO_TAG"
 
-          git push origin main
+          git push \
+            origin \
+            main
+
 
       - name: Show SideStore source URL
         run: |
