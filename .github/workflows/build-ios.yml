@@ -24,12 +24,7 @@ concurrency:
   group: nuvio-ios-builder
   cancel-in-progress: false
 
-
 jobs:
-  # ====================================================================
-  # CHECK UPSTREAM
-  # ====================================================================
-
   check-release:
     name: Check upstream release
     runs-on: ubuntu-latest
@@ -51,16 +46,13 @@ jobs:
           set -euo pipefail
 
           if [ -n "${MANUAL_TAG:-}" ]; then
-
             TAG="$MANUAL_TAG"
 
             RELEASE_JSON="$(
               gh api \
                 "repos/NuvioMedia/NuvioMobile/releases/tags/$TAG"
             )"
-
           else
-
             RELEASE_JSON="$(
               gh api \
                 repos/NuvioMedia/NuvioMobile/releases/latest
@@ -70,7 +62,6 @@ jobs:
               echo "$RELEASE_JSON" |
                 jq -r '.tag_name'
             )"
-
           fi
 
           PRERELEASE="$(
@@ -93,7 +84,6 @@ jobs:
           echo "upstream_url=$UPSTREAM_URL" >> "$GITHUB_OUTPUT"
 
           if [ "${FORCE_REBUILD:-false}" = "true" ]; then
-
             echo "Force rebuild requested."
             echo "should_build=true" >> "$GITHUB_OUTPUT"
 
@@ -105,16 +95,9 @@ jobs:
             echo "should_build=false" >> "$GITHUB_OUTPUT"
 
           else
-
             echo "Release $TAG has not been built."
             echo "should_build=true" >> "$GITHUB_OUTPUT"
-
           fi
-
-
-  # ====================================================================
-  # BUILD IPA
-  # ====================================================================
 
   build:
     name: Build ${{ needs.check-release.outputs.tag }}
@@ -124,17 +107,12 @@ jobs:
 
     if: needs.check-release.outputs.should_build == 'true'
 
-    # 14 GB Intel runner + current Xcode/iOS SDK.
     runs-on: macos-26-intel
 
     env:
       NUVIO_TAG: ${{ needs.check-release.outputs.tag }}
 
     steps:
-      # ----------------------------------------------------------------
-      # Environment
-      # ----------------------------------------------------------------
-
       - name: Show build environment
         run: |
           set -euo pipefail
@@ -158,17 +136,11 @@ jobs:
           echo "Memory:"
           sysctl hw.memsize || true
 
-
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-
-
-      # ----------------------------------------------------------------
-      # Clone exact upstream release
-      # ----------------------------------------------------------------
 
       - name: Clone official Nuvio release
         run: |
@@ -195,14 +167,6 @@ jobs:
           echo
           echo "MPVKit commit:"
           git -C MPVKit rev-parse HEAD
-
-
-      # ----------------------------------------------------------------
-      # Discover runtime configuration schema from THIS release.
-      #
-      # We inspect Nuvio's actual build script instead of maintaining
-      # our own authoritative list.
-      # ----------------------------------------------------------------
 
       - name: Discover expected runtime configuration
         working-directory: upstream
@@ -259,21 +223,12 @@ jobs:
           )
 
           print(
-              f"Found {len(keys)} expected "
-              "runtime properties:"
+              f"Found {len(keys)} expected runtime properties:"
           )
 
           for key in keys:
               print(f"  {key}")
           PY
-
-
-      # ----------------------------------------------------------------
-      # Download official Full Android APK.
-      #
-      # Any architecture should contain the same application-level
-      # runtime configuration. Prefer the smallest full APK.
-      # ----------------------------------------------------------------
 
       - name: Download official Full APK
         env:
@@ -347,11 +302,6 @@ jobs:
           echo "OFFICIAL_APK=$APK_PATH" \
             >> "$GITHUB_ENV"
 
-
-      # ----------------------------------------------------------------
-      # JADX
-      # ----------------------------------------------------------------
-
       - name: Download JADX
         env:
           GH_TOKEN: ${{ github.token }}
@@ -411,38 +361,79 @@ jobs:
           echo "JADX_BIN=$JADX_DIR/bin/jadx" \
             >> "$GITHUB_ENV"
 
-
       - name: Decompile official APK
         run: |
-          set -euo pipefail
+          set -u
 
           OUTPUT="$RUNNER_TEMP/jadx-output"
+          JADX_LOG="$RUNNER_TEMP/jadx.log"
+
+          rm -rf "$OUTPUT"
+
+          echo "Decompiling APK with JADX..."
+          echo
+          echo "JADX may report partial decompilation errors."
+          echo "Those are allowed as long as usable output is produced."
+          echo
+
+          set +e
 
           "$JADX_BIN" \
             --no-res \
             --show-bad-code \
             --threads-count 4 \
             --output-dir "$OUTPUT" \
-            "$OFFICIAL_APK"
+            "$OFFICIAL_APK" \
+            2>&1 | tee "$JADX_LOG"
+
+          JADX_STATUS=${PIPESTATUS[0]}
+
+          set -e
+
+          echo
+          echo "JADX exit code: $JADX_STATUS"
+
+          if [ "$JADX_STATUS" -ne 0 ]; then
+            echo
+            echo "JADX completed with partial decompilation errors."
+            echo "Continuing because JADX commonly cannot decompile"
+            echo "100% of optimized APKs."
+          fi
+
+          if [ ! -d "$OUTPUT" ]; then
+            echo
+            echo "JADX produced no output directory."
+            exit 1
+          fi
+
+          SOURCE_COUNT="$(
+            find "$OUTPUT" \
+              -type f \
+              \( -name '*.java' -o -name '*.kt' \) \
+              | wc -l \
+              | tr -d ' '
+          )"
+
+          echo
+          echo "Decompiled source files: $SOURCE_COUNT"
+
+          if [ "$SOURCE_COUNT" -lt 1 ]; then
+            echo
+            echo "JADX produced no usable source files."
+            exit 1
+          fi
+
+          echo
+          echo "Last JADX errors/warnings:"
+
+          grep -E \
+            "ERROR|WARN|failed|exception" \
+            "$JADX_LOG" \
+            | tail -50 \
+            || true
 
           echo "JADX_OUTPUT=$OUTPUT" \
             >> "$GITHUB_ENV"
-
-          echo
-          echo "Decompiled source files:"
-
-          find "$OUTPUT" \
-            -type f \
-            \( -name '*.java' -o -name '*.kt' \) |
-            wc -l
-
-
-      # ----------------------------------------------------------------
-      # Extract ALL DEX strings as secondary evidence.
-      #
-      # JADX gives us call-site context.
-      # Raw DEX strings give us values that JADX may inline/obfuscate.
-      # ----------------------------------------------------------------
 
       - name: Extract DEX strings
         run: |
@@ -464,7 +455,6 @@ jobs:
               / "dex-strings.txt"
           )
 
-
           def read_uleb128(data, offset):
               result = 0
               shift = 0
@@ -481,7 +471,6 @@ jobs:
                       return result, offset
 
                   shift += 7
-
 
           def extract_dex_strings(data):
               count, table = struct.unpack_from(
@@ -525,7 +514,6 @@ jobs:
 
               return values
 
-
           values = set()
 
           with zipfile.ZipFile(
@@ -567,24 +555,9 @@ jobs:
 
           print()
           print(
-              f"Extracted {len(values)} "
-              "unique DEX strings."
+              f"Extracted {len(values)} unique DEX strings."
           )
           PY
-
-
-      # ----------------------------------------------------------------
-      # Reverse-engineer runtime configuration.
-      #
-      # Strategy:
-      #
-      # 1. Parse expected keys from source.
-      # 2. Use strongly identifying patterns for URLs/JWTs.
-      # 3. Use decompiled OAuth call-site context for opaque credentials.
-      # 4. Verify each value exists in the APK.
-      # 5. Refuse to build when a required/unknown new property cannot
-      #    be confidently mapped.
-      # ----------------------------------------------------------------
 
       - name: Reverse engineer runtime configuration
         working-directory: upstream
@@ -646,13 +619,11 @@ jobs:
                   (path, text)
               )
 
-
           def mask(value):
               if value:
                   print(
                       f"::add-mask::{value}"
                   )
-
 
           def first_dex(predicate):
               for value in dex_strings:
@@ -661,28 +632,14 @@ jobs:
 
               return None
 
-
-          def find_url(fragment):
-              fragment = fragment.lower()
-
-              return first_dex(
-                  lambda value:
-                      value.startswith(
-                          ("http://", "https://")
-                      )
-                      and
-                      fragment in value.lower()
-              )
-
-
-          def find_exact_url(host_fragment):
+          def find_exact_url(fragment):
               candidates = [
                   value
                   for value in dex_strings
                   if value.startswith(
                       ("http://", "https://")
                   )
-                  and host_fragment.lower()
+                  and fragment.lower()
                       in value.lower()
               ]
 
@@ -693,7 +650,6 @@ jobs:
                   candidates,
                   key=len
               )
-
 
           def find_jwt():
               pattern = re.compile(
@@ -720,16 +676,9 @@ jobs:
 
               return None
 
-
-          # ------------------------------------------------------------
-          # Search decompiled source for literal values near integration
-          # markers.
-          # ------------------------------------------------------------
-
           STRING_RE = re.compile(
               r'"((?:\\.|[^"\\])*)"'
           )
-
 
           def nearby_literals(markers):
               markers = [
@@ -775,7 +724,6 @@ jobs:
 
               return scored
 
-
           def opaque_candidates(
               markers,
               regex,
@@ -807,7 +755,6 @@ jobs:
                               )
                           )
 
-              # Deduplicate while preserving evidence.
               result = {}
 
               for path, value in candidates:
@@ -818,10 +765,8 @@ jobs:
 
               return result
 
-
           recovered = {}
           evidence = {}
-
 
           def put(key, value, reason):
               if key not in expected:
@@ -833,11 +778,6 @@ jobs:
               recovered[key] = value
               evidence[key] = reason
               mask(value)
-
-
-          # ============================================================
-          # Public Nuvio backend configuration
-          # ============================================================
 
           put(
               "NUVIO_SUPABASE_URL",
@@ -861,11 +801,6 @@ jobs:
               "matched client-side JWT"
           )
 
-
-          # ============================================================
-          # Sentry
-          # ============================================================
-
           sentry = first_dex(
               lambda value:
                   value.startswith("https://")
@@ -878,11 +813,6 @@ jobs:
               sentry,
               "matched Sentry DSN"
           )
-
-
-          # ============================================================
-          # Trakt
-          # ============================================================
 
           put(
               "TRAKT_REDIRECT_URI",
@@ -903,12 +833,6 @@ jobs:
               ],
               regex=r"[0-9a-fA-F]{64}",
           )
-
-          # Current Nuvio APK layout places the two 64-char Trakt values
-          # in the same OAuth/token-related code region.
-          #
-          # We distinguish them using token-exchange context where JADX
-          # preserves client_secret/client_id labels.
 
           trakt_id = None
           trakt_secret = None
@@ -941,7 +865,6 @@ jobs:
               if len(literals) < 2:
                   continue
 
-              # Search proximity around client_secret/client_id labels.
               for value in literals:
                   positions = [
                       match.start()
@@ -958,23 +881,17 @@ jobs:
                       ].lower()
 
                       if (
-                          "client_secret"
-                          in window
-                          and
-                          trakt_secret is None
+                          "client_secret" in window
+                          and trakt_secret is None
                       ):
                           trakt_secret = value
 
                       if (
-                          "client_id"
-                          in window
-                          and
-                          trakt_id is None
+                          "client_id" in window
+                          and trakt_id is None
                       ):
                           trakt_id = value
 
-          # If proximity caused both to resolve to the same value,
-          # use the stable call-site pair as fallback.
           if (
               trakt_id is None
               or
@@ -982,10 +899,6 @@ jobs:
               or
               trakt_id == trakt_secret
           ):
-              candidate_values = sorted(
-                  trakt_candidates.keys()
-              )
-
               known_current = {
                   "5783db7c46a5b22f072d4b224f9bd7dc2cbaba66dbe3515d1feb59e3ca72394c":
                       "id",
@@ -994,7 +907,7 @@ jobs:
                       "secret",
               }
 
-              for value in candidate_values:
+              for value in trakt_candidates:
                   role = known_current.get(
                       value
                   )
@@ -1016,11 +929,6 @@ jobs:
               trakt_secret,
               "Trakt token-exchange call-site"
           )
-
-
-          # ============================================================
-          # Simkl
-          # ============================================================
 
           put(
               "SIMKL_REDIRECT_URI",
@@ -1055,7 +963,6 @@ jobs:
 
           simkl_id = None
 
-          # Known current layout.
           current_simkl = (
               "dc20e0db975583b15096267cee79cd23"
               "b1f56d4bd301ce3c51e4a96a49c834a6"
@@ -1076,11 +983,6 @@ jobs:
               simkl_id,
               "Simkl OAuth call-site"
           )
-
-
-          # ============================================================
-          # Premiumize
-          # ============================================================
 
           premiumize_candidates = opaque_candidates(
               markers=[
@@ -1111,11 +1013,6 @@ jobs:
               "Premiumize auth call-site"
           )
 
-
-          # ============================================================
-          # IntroDB
-          # ============================================================
-
           put(
               "INTRODB_API_URL",
               find_exact_url(
@@ -1123,11 +1020,6 @@ jobs:
               ),
               "matched IntroDB endpoint"
           )
-
-
-          # ============================================================
-          # IMDb / ratings
-          # ============================================================
 
           put(
               "IMDB_RATINGS_API_BASE_URL",
@@ -1145,19 +1037,12 @@ jobs:
               "matched Tapframe IMDb service"
           )
 
-
-          # ============================================================
-          # Community / donations
-          # ============================================================
-
           contributions = first_dex(
               lambda value:
                   value.startswith("https://")
-                  and
-                  "gitserver.tapframe.space"
+                  and "gitserver.tapframe.space"
                       in value
-                  and
-                  "unique-contributions"
+                  and "unique-contributions"
                       in value
           )
 
@@ -1166,7 +1051,6 @@ jobs:
               contributions,
               "matched contribution endpoint"
           )
-
 
           donation_root = find_exact_url(
               "donate.nuvio.tv"
@@ -1183,11 +1067,6 @@ jobs:
               donation_root,
               "matched donation page"
           )
-
-
-          # ============================================================
-          # Validation
-          # ============================================================
 
           missing = [
               key
@@ -1259,11 +1138,6 @@ jobs:
 
               raise SystemExit(1)
 
-
-          # ============================================================
-          # Write local.properties
-          # ============================================================
-
           def escape(value):
               return (
                   value
@@ -1271,7 +1145,6 @@ jobs:
                   .replace("\r", "")
                   .replace("\n", "\\n")
               )
-
 
           output = Path(
               "local.properties"
@@ -1313,11 +1186,6 @@ jobs:
               "local.properties generated successfully."
           )
           PY
-
-
-      # ----------------------------------------------------------------
-      # Validate resulting configuration without exposing values.
-      # ----------------------------------------------------------------
 
       - name: Validate generated local.properties
         working-directory: upstream
@@ -1394,11 +1262,6 @@ jobs:
               )
           PY
 
-
-      # ----------------------------------------------------------------
-      # Cache build dependencies.
-      # ----------------------------------------------------------------
-
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -1406,29 +1269,17 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}-${{ hashFiles('upstream/**/*.gradle.kts', 'upstream/**/*.gradle', 'upstream/gradle/libs.versions.toml', 'upstream/gradle/wrapper/gradle-wrapper.properties') }}
-
           restore-keys: |
             gradle-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}-
             gradle-${{ runner.os }}-${{ runner.arch }}-
-
 
       - name: Cache Kotlin Native
         uses: actions/cache@v4
         with:
           path: ~/.konan
-
           key: konan-${{ runner.os }}-${{ runner.arch }}-${{ needs.check-release.outputs.tag }}
-
           restore-keys: |
             konan-${{ runner.os }}-${{ runner.arch }}-
-
-
-      # ----------------------------------------------------------------
-      # GitHub runner memory configuration.
-      #
-      # Nuvio's Kotlin/Native release linker exceeded 3 GB and then 2 GB
-      # Gradle heaps in previous builds. The Intel runner has 14 GB.
-      # ----------------------------------------------------------------
 
       - name: Configure Gradle memory
         working-directory: upstream
@@ -1460,7 +1311,6 @@ jobs:
             echo \
               'org.gradle.workers.max=1' \
               >> gradle.properties
-
           fi
 
           if grep -q \
@@ -1476,35 +1326,27 @@ jobs:
             echo \
               'org.gradle.parallel=false' \
               >> gradle.properties
-
           fi
 
           echo "Gradle configuration:"
+
           grep -E \
             '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|kotlin\.native\.jvmArgs|org\.gradle\.workers\.max|org\.gradle\.parallel)=' \
             gradle.properties
 
-
       - name: Make Gradle wrapper executable
         run: |
           chmod +x upstream/gradlew
-
 
       - name: Verify Gradle
         working-directory: upstream
         run: |
           ./gradlew --version
 
-
       - name: Stop existing Gradle daemons
         working-directory: upstream
         run: |
           ./gradlew --stop || true
-
-
-      # ----------------------------------------------------------------
-      # Build
-      # ----------------------------------------------------------------
 
       - name: Build unsigned iOS app
         working-directory: upstream
@@ -1569,17 +1411,11 @@ jobs:
             exit "$BUILD_STATUS"
           fi
 
-
       - name: Stop Gradle daemon
         if: always()
         working-directory: upstream
         run: |
           ./gradlew --stop || true
-
-
-      # ----------------------------------------------------------------
-      # Package
-      # ----------------------------------------------------------------
 
       - name: Locate built app
         id: app
@@ -1597,9 +1433,7 @@ jobs:
           )"
 
           if [ -z "$APP_PATH" ]; then
-
             echo "Nuvio.app was not found."
-
             exit 1
           fi
 
@@ -1608,7 +1442,6 @@ jobs:
 
           echo "app_path=$APP_PATH" \
             >> "$GITHUB_OUTPUT"
-
 
       - name: Inspect app metadata
         run: |
@@ -1640,7 +1473,6 @@ jobs:
             -c "Print :MinimumOSVersion" \
             "$PLIST" ||
             true
-
 
       - name: Package IPA
         id: package
@@ -1676,7 +1508,6 @@ jobs:
           echo "ipa=$IPA" \
             >> "$GITHUB_OUTPUT"
 
-
       - name: Validate IPA
         run: |
           set -euo pipefail
@@ -1689,11 +1520,6 @@ jobs:
           echo
           ls -lh "$IPA"
 
-
-      # ----------------------------------------------------------------
-      # Release
-      # ----------------------------------------------------------------
-
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1704,8 +1530,6 @@ jobs:
 
           IPA="${{ steps.package.outputs.ipa }}"
 
-          # Only delete the previous release after a complete replacement
-          # IPA exists.
           if gh release view "$NUVIO_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               >/dev/null 2>&1; then
@@ -1758,11 +1582,6 @@ jobs:
 
           fi
 
-
-  # ====================================================================
-  # SIDESTORE SOURCE
-  # ====================================================================
-
   update-source:
     name: Update SideStore source
 
@@ -1789,7 +1608,6 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-
 
       - name: Download IPA
         env:
@@ -1820,7 +1638,6 @@ jobs:
 
           echo "IPA_PATH=$IPA" \
             >> "$GITHUB_ENV"
-
 
       - name: Extract IPA metadata
         id: metadata
@@ -1914,7 +1731,6 @@ jobs:
               )
           PY
 
-
       - name: Get upstream release info
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1924,7 +1740,6 @@ jobs:
           gh api \
             "repos/NuvioMedia/NuvioMobile/releases/tags/$NUVIO_TAG" \
             > "$RUNNER_TEMP/upstream-release.json"
-
 
       - name: Update source.json
         env:
@@ -1976,7 +1791,6 @@ jobs:
               f"{tag}/Nuvio-{tag}.ipa"
           )
 
-          # Use upstream app icon.
           icon_url = (
               "https://raw.githubusercontent.com/"
               f"NuvioMedia/NuvioMobile/{tag}/"
@@ -2116,7 +1930,6 @@ jobs:
               []
           )
 
-          # Replace duplicate version/build entry.
           versions = [
               item
               for item in versions
@@ -2152,7 +1965,6 @@ jobs:
           )
           PY
 
-
       - name: Validate source.json
         run: |
           set -euo pipefail
@@ -2169,7 +1981,6 @@ jobs:
             '.apps[0].versions[] |
             "\(.version) (\(.buildVersion))"' \
             source.json
-
 
       - name: Commit source.json
         run: |
@@ -2207,7 +2018,6 @@ jobs:
           git push \
             origin \
             main
-
 
       - name: Show SideStore source URL
         run: |
