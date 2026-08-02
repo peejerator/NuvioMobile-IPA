@@ -117,23 +117,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "macOS:"
           sw_vers
-
-          echo
-          echo "Architecture:"
           uname -m
-
-          echo
-          echo "Xcode:"
           xcodebuild -version
-
-          echo
-          echo "iPhoneOS SDK:"
           xcrun --sdk iphoneos --show-sdk-version
-
-          echo
-          echo "Memory:"
           sysctl hw.memsize || true
 
       - name: Set up Java 17
@@ -160,11 +147,9 @@ jobs:
             --init \
             --recursive
 
-          echo
           echo "Nuvio commit:"
           git rev-parse HEAD
 
-          echo
           echo "MPVKit commit:"
           git -C MPVKit rev-parse HEAD
 
@@ -185,9 +170,7 @@ jobs:
                   "composeApp/build.gradle.kts was not found."
               )
 
-          text = build_file.read_text(
-              encoding="utf-8"
-          )
+          text = build_file.read_text(encoding="utf-8")
 
           keys = set()
 
@@ -197,10 +180,7 @@ jobs:
           ]
 
           for pattern in patterns:
-              for match in re.finditer(
-                  pattern,
-                  text
-              ):
+              for match in re.finditer(pattern, text):
                   keys.add(match.group(1))
 
           ignored = {
@@ -209,16 +189,10 @@ jobs:
           }
 
           keys -= ignored
-
           keys = sorted(keys)
 
-          Path(
-              "../expected-runtime-keys.json"
-          ).write_text(
-              json.dumps(
-                  keys,
-                  indent=2
-              ) + "\n",
+          Path("../expected-runtime-keys.json").write_text(
+              json.dumps(keys, indent=2) + "\n",
               encoding="utf-8"
           )
 
@@ -246,7 +220,6 @@ jobs:
           )"
 
           echo "Available APK assets:"
-          echo
 
           echo "$RELEASE_JSON" |
             jq -r '
@@ -277,14 +250,11 @@ jobs:
 
           if [ -z "$APK_NAME" ] ||
              [ "$APK_NAME" = "null" ]; then
-
-            echo
             echo "No Full APK found for $NUVIO_TAG."
             exit 1
           fi
 
-          echo
-          echo "Selected:"
+          echo "Selected APK:"
           echo "$APK_NAME"
 
           gh release download "$NUVIO_TAG" \
@@ -296,7 +266,6 @@ jobs:
 
           test -f "$APK_PATH"
 
-          echo
           ls -lh "$APK_PATH"
 
           echo "OFFICIAL_APK=$APK_PATH" \
@@ -335,7 +304,6 @@ jobs:
 
           if [ -z "$JADX_URL" ] ||
              [ "$JADX_URL" = "null" ]; then
-
             echo "Could not find JADX archive."
             exit 1
           fi
@@ -355,8 +323,7 @@ jobs:
           chmod +x \
             "$JADX_DIR/bin/jadx"
 
-          "$JADX_DIR/bin/jadx" \
-            --version
+          "$JADX_DIR/bin/jadx" --version
 
           echo "JADX_BIN=$JADX_DIR/bin/jadx" \
             >> "$GITHUB_ENV"
@@ -369,12 +336,6 @@ jobs:
           JADX_LOG="$RUNNER_TEMP/jadx.log"
 
           rm -rf "$OUTPUT"
-
-          echo "Decompiling APK with JADX..."
-          echo
-          echo "JADX may report partial decompilation errors."
-          echo "Those are allowed as long as usable output is produced."
-          echo
 
           set +e
 
@@ -394,14 +355,11 @@ jobs:
           echo "JADX exit code: $JADX_STATUS"
 
           if [ "$JADX_STATUS" -ne 0 ]; then
-            echo
             echo "JADX completed with partial decompilation errors."
-            echo "Continuing because JADX commonly cannot decompile"
-            echo "100% of optimized APKs."
+            echo "Continuing because usable output may still exist."
           fi
 
           if [ ! -d "$OUTPUT" ]; then
-            echo
             echo "JADX produced no output directory."
             exit 1
           fi
@@ -414,23 +372,12 @@ jobs:
               | tr -d ' '
           )"
 
-          echo
           echo "Decompiled source files: $SOURCE_COUNT"
 
           if [ "$SOURCE_COUNT" -lt 1 ]; then
-            echo
             echo "JADX produced no usable source files."
             exit 1
           fi
-
-          echo
-          echo "Last JADX errors/warnings:"
-
-          grep -E \
-            "ERROR|WARN|failed|exception" \
-            "$JADX_LOG" \
-            | tail -50 \
-            || true
 
           echo "JADX_OUTPUT=$OUTPUT" \
             >> "$GITHUB_ENV"
@@ -446,9 +393,7 @@ jobs:
           import zipfile
           from pathlib import Path
 
-          apk = Path(
-              os.environ["OFFICIAL_APK"]
-          )
+          apk = Path(os.environ["OFFICIAL_APK"])
 
           output = (
               Path(os.environ["RUNNER_TEMP"])
@@ -498,9 +443,7 @@ jobs:
                       position
                   )
 
-                  raw = data[
-                      position:end
-                  ]
+                  raw = data[position:end]
 
                   try:
                       value = raw.decode("utf-8")
@@ -516,10 +459,7 @@ jobs:
 
           values = set()
 
-          with zipfile.ZipFile(
-              apk,
-              "r"
-          ) as archive:
+          with zipfile.ZipFile(apk, "r") as archive:
 
               dex_files = sorted(
                   name
@@ -547,9 +487,7 @@ jobs:
                   )
 
           output.write_text(
-              "\n".join(
-                  sorted(values)
-              ) + "\n",
+              "\n".join(sorted(values)) + "\n",
               encoding="utf-8"
           )
 
@@ -570,9 +508,7 @@ jobs:
           import re
           from pathlib import Path
 
-          runner = Path(
-              os.environ["RUNNER_TEMP"]
-          )
+          runner = Path(os.environ["RUNNER_TEMP"])
 
           expected = json.loads(
               Path(
@@ -590,18 +526,16 @@ jobs:
               errors="ignore"
           ).splitlines()
 
-          dex_set = set(
-              dex_strings
-          )
+          dex_set = set(dex_strings)
 
           jadx_root = Path(
               os.environ["JADX_OUTPUT"]
           )
 
-          source_files = list(
-              jadx_root.rglob("*.java")
-          ) + list(
-              jadx_root.rglob("*.kt")
+          source_files = (
+              list(jadx_root.rglob("*.java"))
+              +
+              list(jadx_root.rglob("*.kt"))
           )
 
           source_texts = []
@@ -680,13 +614,33 @@ jobs:
               r'"((?:\\.|[^"\\])*)"'
           )
 
+          def literals_from_text(text):
+              result = []
+
+              for match in STRING_RE.finditer(text):
+                  raw = match.group(1)
+
+                  try:
+                      value = bytes(
+                          raw,
+                          "utf-8"
+                      ).decode(
+                          "unicode_escape"
+                      )
+                  except Exception:
+                      value = raw
+
+                  result.append(value)
+
+              return result
+
           def nearby_literals(markers):
               markers = [
                   marker.lower()
                   for marker in markers
               ]
 
-              scored = []
+              matches = []
 
               for path, text in source_texts:
                   lower = text.lower()
@@ -697,32 +651,20 @@ jobs:
                   ):
                       continue
 
-                  literals = []
+                  literals = [
+                      value
+                      for value in literals_from_text(text)
+                      if value in dex_set
+                  ]
 
-                  for match in STRING_RE.finditer(text):
-                      raw = match.group(1)
-
-                      try:
-                          value = bytes(
-                              raw,
-                              "utf-8"
-                          ).decode(
-                              "unicode_escape"
-                          )
-                      except Exception:
-                          value = raw
-
-                      if value in dex_set:
-                          literals.append(value)
-
-                  scored.append(
+                  matches.append(
                       (
                           path,
                           literals
                       )
                   )
 
-              return scored
+              return matches
 
           def opaque_candidates(
               markers,
@@ -736,34 +678,22 @@ jobs:
                   for value in exclusions
               }
 
-              candidates = []
+              candidates = {}
 
               for path, literals in nearby_literals(
                   markers
               ):
                   for value in literals:
-                      lower = value.lower()
-
-                      if lower in exclusions:
+                      if value.lower() in exclusions:
                           continue
 
                       if pattern.fullmatch(value):
-                          candidates.append(
-                              (
-                                  path,
-                                  value
-                              )
-                          )
+                          candidates.setdefault(
+                              value,
+                              []
+                          ).append(path)
 
-              result = {}
-
-              for path, value in candidates:
-                  result.setdefault(
-                      value,
-                      []
-                  ).append(path)
-
-              return result
+              return candidates
 
           recovered = {}
           evidence = {}
@@ -777,7 +707,12 @@ jobs:
 
               recovered[key] = value
               evidence[key] = reason
+
               mask(value)
+
+          # ------------------------------------------------------------
+          # Nuvio backend
+          # ------------------------------------------------------------
 
           put(
               "NUVIO_SUPABASE_URL",
@@ -801,11 +736,17 @@ jobs:
               "matched client-side JWT"
           )
 
+          # ------------------------------------------------------------
+          # Sentry
+          # ------------------------------------------------------------
+
           sentry = first_dex(
               lambda value:
                   value.startswith("https://")
-                  and "sentry.io" in value.lower()
-                  and "@" in value
+                  and
+                  "sentry.io" in value.lower()
+                  and
+                  "@" in value
           )
 
           put(
@@ -813,6 +754,10 @@ jobs:
               sentry,
               "matched Sentry DSN"
           )
+
+          # ------------------------------------------------------------
+          # Trakt
+          # ------------------------------------------------------------
 
           put(
               "TRAKT_REDIRECT_URI",
@@ -862,9 +807,6 @@ jobs:
                   dict.fromkeys(literals)
               )
 
-              if len(literals) < 2:
-                  continue
-
               for value in literals:
                   positions = [
                       match.start()
@@ -876,47 +818,28 @@ jobs:
 
                   for position in positions:
                       window = text[
-                          max(0, position - 1500):
+                          max(
+                              0,
+                              position - 1500
+                          ):
                           position + 1500
                       ].lower()
 
                       if (
-                          "client_secret" in window
-                          and trakt_secret is None
+                          "client_secret"
+                          in window
+                          and
+                          trakt_secret is None
                       ):
                           trakt_secret = value
 
                       if (
-                          "client_id" in window
-                          and trakt_id is None
+                          "client_id"
+                          in window
+                          and
+                          trakt_id is None
                       ):
                           trakt_id = value
-
-          if (
-              trakt_id is None
-              or
-              trakt_secret is None
-              or
-              trakt_id == trakt_secret
-          ):
-              known_current = {
-                  "5783db7c46a5b22f072d4b224f9bd7dc2cbaba66dbe3515d1feb59e3ca72394c":
-                      "id",
-
-                  "bf6e7561dafee902f5a2a67d2b31feac1563632f331f3958c978aff6389ea384":
-                      "secret",
-              }
-
-              for value in trakt_candidates:
-                  role = known_current.get(
-                      value
-                  )
-
-                  if role == "id":
-                      trakt_id = value
-
-                  elif role == "secret":
-                      trakt_secret = value
 
           put(
               "TRAKT_CLIENT_ID",
@@ -929,6 +852,10 @@ jobs:
               trakt_secret,
               "Trakt token-exchange call-site"
           )
+
+          # ------------------------------------------------------------
+          # Simkl
+          # ------------------------------------------------------------
 
           put(
               "SIMKL_REDIRECT_URI",
@@ -963,15 +890,7 @@ jobs:
 
           simkl_id = None
 
-          current_simkl = (
-              "dc20e0db975583b15096267cee79cd23"
-              "b1f56d4bd301ce3c51e4a96a49c834a6"
-          )
-
-          if current_simkl in simkl_candidates:
-              simkl_id = current_simkl
-
-          elif len(
+          if len(
               simkl_candidates
           ) == 1:
               simkl_id = next(
@@ -984,34 +903,205 @@ jobs:
               "Simkl OAuth call-site"
           )
 
-          premiumize_candidates = opaque_candidates(
-              markers=[
-                  "premiumize.me",
-                  "premiumize",
-                  "client_id",
-              ],
-              regex=r"[0-9]{3,12}",
-          )
+          # ------------------------------------------------------------
+          # Premiumize
+          #
+          # Kotlin may inline PremiumizeConfig.CLIENT_ID, meaning the
+          # numeric value is no longer located in the same decompiled
+          # source file as the Premiumize URL.
+          #
+          # Resolve in layers:
+          #
+          # 1. Direct Premiumize-specific source context.
+          # 2. Debrid/device-auth source context.
+          # 3. Verified current ID only when the SAME APK still contains
+          #    that ID in its DEX.
+          #
+          # The fallback is intentionally not unconditional. If Nuvio
+          # changes the ID and 885913 disappears, extraction fails rather
+          # than silently compiling the old credential.
+          # ------------------------------------------------------------
 
           premiumize_id = None
 
-          if "885913" in premiumize_candidates:
-              premiumize_id = "885913"
+          premiumize_markers = [
+              "premiumize_client_id",
+              "premiumize sign-in is missing",
+              "premiumize.me/token",
+              "premiumize.me/api/",
+              "premiumizedeviceauthorizationdto",
+              "premiumizedevicetokendto",
+          ]
 
-          elif len(
-              premiumize_candidates
-          ) == 1:
+          premiumize_direct = opaque_candidates(
+              markers=premiumize_markers,
+              regex=r"[0-9]{4,12}",
+          )
+
+          if len(premiumize_direct) == 1:
               premiumize_id = next(
-                  iter(
-                      premiumize_candidates
+                  iter(premiumize_direct)
+              )
+
+          if premiumize_id is None:
+              scored = {}
+
+              for path, text in source_texts:
+                  lower = text.lower()
+
+                  premiumize_context = (
+                      "premiumize" in lower
+                      or
+                      "features.debrid" in lower
+                      or
+                      "features/debrid" in str(
+                          path
+                      ).lower()
                   )
+
+                  auth_context = any(
+                      marker in lower
+                      for marker in [
+                          "device_code",
+                          "client_id",
+                          "token",
+                          "authorization",
+                          "premiumize_client_id",
+                          "missing_client_id",
+                      ]
+                  )
+
+                  if not (
+                      premiumize_context
+                      and
+                      auth_context
+                  ):
+                      continue
+
+                  for value in literals_from_text(
+                      text
+                  ):
+                      if not re.fullmatch(
+                          r"[0-9]{4,12}",
+                          value
+                      ):
+                          continue
+
+                      if value not in dex_set:
+                          continue
+
+                      score = 0
+
+                      if "premiumize" in lower:
+                          score += 4
+
+                      if (
+                          "premiumize_client_id"
+                          in lower
+                      ):
+                          score += 8
+
+                      if (
+                          "premiumize sign-in "
+                          "is missing"
+                          in lower
+                      ):
+                          score += 8
+
+                      if "device_code" in lower:
+                          score += 3
+
+                      if "client_id" in lower:
+                          score += 3
+
+                      if (
+                          "premiumize.me/token"
+                          in lower
+                      ):
+                          score += 5
+
+                      if (
+                          "premiumizedevice"
+                          in lower
+                      ):
+                          score += 5
+
+                      scored[value] = max(
+                          scored.get(value, 0),
+                          score
+                      )
+
+              if scored:
+                  best_score = max(
+                      scored.values()
+                  )
+
+                  best = [
+                      value
+                      for value, score
+                      in scored.items()
+                      if score == best_score
+                  ]
+
+                  if (
+                      len(best) == 1
+                      and
+                      best_score >= 5
+                  ):
+                      premiumize_id = best[0]
+
+          # Compatibility fallback for the currently verified official
+          # Nuvio Full configuration.
+          #
+          # IMPORTANT:
+          # This value is accepted only if it is physically present in
+          # the APK currently being analyzed.
+          #
+          # If a future Nuvio release changes Premiumize's client ID,
+          # this check stops matching and the workflow must either
+          # discover the replacement dynamically above or fail safely.
+          if premiumize_id is None:
+              verified_current_id = "885913"
+
+              if (
+                  verified_current_id
+                  in dex_set
+                  and
+                  "PREMIUMIZE_CLIENT_ID"
+                  in dex_set
+                  and
+                  any(
+                      "premiumize.me"
+                      in value.lower()
+                      for value in dex_strings
+                  )
+              ):
+                  premiumize_id = (
+                      verified_current_id
+                  )
+
+                  premiumize_reason = (
+                      "verified Premiumize ID present "
+                      "in current APK DEX"
+                  )
+              else:
+                  premiumize_reason = None
+          else:
+              premiumize_reason = (
+                  "Premiumize auth/debrid call-site"
               )
 
           put(
               "PREMIUMIZE_CLIENT_ID",
               premiumize_id,
-              "Premiumize auth call-site"
+              premiumize_reason
+              or
+              "Premiumize client ID"
           )
+
+          # ------------------------------------------------------------
+          # IntroDB
+          # ------------------------------------------------------------
 
           put(
               "INTRODB_API_URL",
@@ -1020,6 +1110,10 @@ jobs:
               ),
               "matched IntroDB endpoint"
           )
+
+          # ------------------------------------------------------------
+          # IMDb
+          # ------------------------------------------------------------
 
           put(
               "IMDB_RATINGS_API_BASE_URL",
@@ -1037,13 +1131,19 @@ jobs:
               "matched Tapframe IMDb service"
           )
 
+          # ------------------------------------------------------------
+          # Community
+          # ------------------------------------------------------------
+
           contributions = first_dex(
               lambda value:
                   value.startswith("https://")
-                  and "gitserver.tapframe.space"
-                      in value
-                  and "unique-contributions"
-                      in value
+                  and
+                  "gitserver.tapframe.space"
+                  in value
+                  and
+                  "unique-contributions"
+                  in value
           )
 
           put(
@@ -1068,6 +1168,10 @@ jobs:
               "matched donation page"
           )
 
+          # ------------------------------------------------------------
+          # Validate
+          # ------------------------------------------------------------
+
           missing = [
               key
               for key in expected
@@ -1089,7 +1193,6 @@ jobs:
           print(
               f"Expected:  {len(expected)}"
           )
-
           print(
               f"Recovered: {len(recovered)}"
           )
@@ -1119,11 +1222,11 @@ jobs:
               print(
                   "=============================================="
               )
-              print()
 
+              print()
               print(
-                  "The following properties could not be "
-                  "mapped confidently:"
+                  "The following properties could "
+                  "not be mapped confidently:"
               )
 
               for key in missing:
@@ -1137,6 +1240,10 @@ jobs:
               )
 
               raise SystemExit(1)
+
+          # ------------------------------------------------------------
+          # Generate local.properties
+          # ------------------------------------------------------------
 
           def escape(value):
               return (
@@ -1156,8 +1263,8 @@ jobs:
           ) as file:
 
               file.write(
-                  "# Automatically reverse-engineered "
-                  "from the official Nuvio Full APK.\n"
+                  "# Automatically generated from "
+                  "the official Nuvio Full APK.\n"
               )
 
               file.write(
@@ -1238,7 +1345,8 @@ jobs:
 
           if missing:
               print(
-                  "Generated local.properties is incomplete:"
+                  "Generated local.properties "
+                  "is incomplete:"
               )
 
               for key in missing:
@@ -1307,7 +1415,6 @@ jobs:
               gradle.properties
 
           else
-
             echo \
               'org.gradle.workers.max=1' \
               >> gradle.properties
@@ -1322,17 +1429,10 @@ jobs:
               gradle.properties
 
           else
-
             echo \
               'org.gradle.parallel=false' \
               >> gradle.properties
           fi
-
-          echo "Gradle configuration:"
-
-          grep -E \
-            '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|kotlin\.native\.jvmArgs|org\.gradle\.workers\.max|org\.gradle\.parallel)=' \
-            gradle.properties
 
       - name: Make Gradle wrapper executable
         run: |
@@ -1355,20 +1455,6 @@ jobs:
 
           BUILD_LOG="$RUNNER_TEMP/xcodebuild.log"
 
-          echo "Building Nuvio $NUVIO_TAG..."
-
-          echo
-          echo "Xcode:"
-          xcodebuild -version
-
-          echo
-          echo "iPhoneOS SDK:"
-          xcrun \
-            --sdk iphoneos \
-            --show-sdk-version
-
-          echo
-
           xcodebuild \
             -project iosApp/iosApp.xcodeproj \
             -scheme iosApp \
@@ -1387,22 +1473,14 @@ jobs:
           BUILD_STATUS=${PIPESTATUS[0]}
 
           if [ "$BUILD_STATUS" -ne 0 ]; then
-
             echo
-            echo "=============================================="
             echo "BUILD FAILED"
-            echo "=============================================="
-            echo
 
             grep -n -E \
               "FAILURE:|What went wrong|Execution failed|Exception|OutOfMemory|heap space|Compilation failed|error:|ERROR|e: " \
               "$BUILD_LOG" |
               tail -300 ||
               true
-
-            echo
-            echo "Last 400 build-log lines:"
-            echo
 
             tail -400 \
               "$BUILD_LOG" ||
@@ -1437,9 +1515,6 @@ jobs:
             exit 1
           fi
 
-          echo "Found:"
-          echo "$APP_PATH"
-
           echo "app_path=$APP_PATH" \
             >> "$GITHUB_OUTPUT"
 
@@ -1455,19 +1530,16 @@ jobs:
             -c "Print :CFBundleIdentifier" \
             "$PLIST"
 
-          echo
           echo "Version:"
           /usr/libexec/PlistBuddy \
             -c "Print :CFBundleShortVersionString" \
             "$PLIST"
 
-          echo
           echo "Build:"
           /usr/libexec/PlistBuddy \
             -c "Print :CFBundleVersion" \
             "$PLIST"
 
-          echo
           echo "Minimum iOS:"
           /usr/libexec/PlistBuddy \
             -c "Print :MinimumOSVersion" \
@@ -1501,8 +1573,6 @@ jobs:
             "$IPA" \
             Payload
 
-          echo
-          echo "Created IPA:"
           ls -lh "$IPA"
 
           echo "ipa=$IPA" \
@@ -1514,11 +1584,7 @@ jobs:
 
           IPA="${{ steps.package.outputs.ipa }}"
 
-          unzip -t \
-            "$IPA"
-
-          echo
-          ls -lh "$IPA"
+          unzip -t "$IPA"
 
       - name: Publish GitHub release
         env:
@@ -1534,9 +1600,6 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               >/dev/null 2>&1; then
 
-            echo \
-              "Removing existing release $NUVIO_TAG..."
-
             gh release delete "$NUVIO_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --yes
@@ -1551,13 +1614,8 @@ jobs:
           Built automatically from the official
           NuvioMedia/NuvioMobile ${NUVIO_TAG} source.
 
-          Runtime configuration is automatically recovered from the
-          official Full Android APK for the same release before the iOS
-          build starts.
-
-          The workflow validates the runtime configuration schema and
-          refuses to publish an IPA when a required property cannot be
-          mapped confidently.
+          Runtime configuration is recovered from the matching official
+          Full Android APK and validated before the iOS build begins.
 
           The IPA is unsigned and intended for SideStore or Sideloadly.
           EOF
@@ -1649,19 +1707,13 @@ jobs:
           import plistlib
           import zipfile
 
-          ipa = os.environ[
-              "IPA_PATH"
-          ]
+          ipa = os.environ["IPA_PATH"]
 
-          with zipfile.ZipFile(
-              ipa,
-              "r"
-          ) as archive:
+          with zipfile.ZipFile(ipa, "r") as archive:
 
               plists = [
                   name
-                  for name
-                  in archive.namelist()
+                  for name in archive.namelist()
                   if
                   name.startswith("Payload/")
                   and
@@ -1685,9 +1737,7 @@ jobs:
 
           values = {
               "bundle_id":
-                  info[
-                      "CFBundleIdentifier"
-                  ],
+                  info["CFBundleIdentifier"],
 
               "version":
                   info[
@@ -1695,9 +1745,7 @@ jobs:
                   ],
 
               "build":
-                  info[
-                      "CFBundleVersion"
-                  ],
+                  info["CFBundleVersion"],
 
               "min_os":
                   info.get(
@@ -1706,9 +1754,7 @@ jobs:
                   ),
 
               "size":
-                  os.path.getsize(
-                      ipa
-                  ),
+                  os.path.getsize(ipa),
           }
 
           with open(
@@ -1716,19 +1762,10 @@ jobs:
               "a"
           ) as output:
 
-              for key, value \
-                  in values.items():
-
+              for key, value in values.items():
                   output.write(
                       f"{key}={value}\n"
                   )
-
-          for key, value \
-              in values.items():
-
-              print(
-                  f"{key}: {value}"
-              )
           PY
 
       - name: Get upstream release info
@@ -1905,25 +1942,17 @@ jobs:
                   ],
               }
 
-          source["iconURL"] = \
-              icon_url
-
+          source["iconURL"] = icon_url
           source["website"] = \
               f"https://github.com/{repo}"
 
-          app = source[
-              "apps"
-          ][0]
+          app = source["apps"][0]
 
           app[
               "bundleIdentifier"
-          ] = os.environ[
-              "BUNDLE_ID"
-          ]
+          ] = os.environ["BUNDLE_ID"]
 
-          app[
-              "iconURL"
-          ] = icon_url
+          app["iconURL"] = icon_url
 
           versions = app.setdefault(
               "versions",
@@ -1974,9 +2003,6 @@ jobs:
             source.json \
             >/dev/null
 
-          echo
-          echo "SideStore versions:"
-
           jq -r \
             '.apps[0].versions[] |
             "\(.version) (\(.buildVersion))"' \
@@ -1994,9 +2020,7 @@ jobs:
                 source.json \
                 >/dev/null 2>&1; then
 
-            echo \
-              "source.json is already current."
-
+            echo "source.json is already current."
             exit 0
           fi
 
@@ -2008,16 +2032,13 @@ jobs:
             user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add \
-            source.json
+          git add source.json
 
           git commit \
             -m \
             "Update SideStore source for Nuvio $NUVIO_TAG"
 
-          git push \
-            origin \
-            main
+          git push origin main
 
       - name: Show SideStore source URL
         run: |
