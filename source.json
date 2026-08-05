@@ -3,7 +3,7 @@
   "subtitle": "Automatic iOS builds of Nuvio",
   "description": "Unofficial SideStore source containing iOS builds created automatically from official Nuvio releases.",
   "website": "https://github.com/peejerator/NuvioMobile-IPA",
-  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.1/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.2/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
   "tintColor": "7B2FF7",
   "news": [],
   "apps": [
@@ -13,10 +13,19 @@
       "developerName": "Nuvio",
       "subtitle": "Watch your library, anywhere",
       "localizedDescription": "Unofficial iOS build generated automatically from the official NuvioMobile source code.",
-      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.1/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.2/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
       "tintColor": "7B2FF7",
       "category": "entertainment",
       "versions": [
+        {
+          "version": "0.4.2",
+          "buildVersion": "106",
+          "date": "2026-08-05T05:59:14Z",
+          "localizedDescription": "8881eae1 fix(player): align addon subtitle loading with TV @tapframe    \r\n257e8060 fix(watching): align next-up release-day behavior @tapframe  \r\nba2ec4a0 fix(player): observe episode stream state @tapframe  \r\n1d2ec889 add isMovieEntry @skoruppa  \r\n6e5e41f3 Fix anime movies watched checkmarks for simkl @skoruppa  \r\n989580e5 Stabilize in progress items and add coil cache control @skoruppa  \r\n45c7d70c i18n: complete Turkish translations @halibiram  \r\n",
+          "downloadURL": "https://github.com/peejerator/NuvioMobile-IPA/releases/download/0.4.2/Nuvio-0.4.2.ipa",
+          "size": 43015397,
+          "minOSVersion": "16.1"
+        },
         {
           "version": "0.4.1",
           "buildVersion": "104",
