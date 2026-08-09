@@ -3,7 +3,7 @@
   "subtitle": "Automatic iOS builds of Nuvio",
   "description": "Unofficial SideStore source containing iOS builds created automatically from official Nuvio releases.",
   "website": "https://github.com/peejerator/NuvioMobile-IPA",
-  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.2/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.3/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
   "tintColor": "7B2FF7",
   "news": [],
   "apps": [
@@ -13,10 +13,19 @@
       "developerName": "Nuvio",
       "subtitle": "Watch your library, anywhere",
       "localizedDescription": "Unofficial iOS build generated automatically from the official NuvioMobile source code.",
-      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.2/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.3/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
       "tintColor": "7B2FF7",
       "category": "entertainment",
       "versions": [
+        {
+          "version": "0.4.3",
+          "buildVersion": "107",
+          "date": "2026-08-09T15:20:21Z",
+          "localizedDescription": "eb2d5d3a fix: persist Trakt watched state @tapframe  \r\na2976850 i18n: fix Greek plugins entry title and error string wording @nosvasedis  \r\n42073639 i18n: add missing Greek Simkl library strings @nosvasedis  \r\n3ac0a14c fix(simkl): update library poster res @tapframe  \r\n24971f4a feat(sync): sync provider credentials across clients @tapframe  \r\na36814af i18n: complete Greek (el) translations @nosvasedis  \r\nea2c77cc Update Dutch (nl) strings and reorder nl locale @mronion212  \r\n590a7e27 Add new Slovak strings for Simkl integration @mmsw91  \r\n",
+          "downloadURL": "https://github.com/peejerator/NuvioMobile-IPA/releases/download/0.4.3/Nuvio-0.4.3.ipa",
+          "size": 43065578,
+          "minOSVersion": "16.1"
+        },
         {
           "version": "0.4.2",
           "buildVersion": "106",
