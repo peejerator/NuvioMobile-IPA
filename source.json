@@ -3,7 +3,7 @@
   "subtitle": "Automatic iOS builds of Nuvio",
   "description": "Unofficial SideStore source containing iOS builds created automatically from official Nuvio releases.",
   "website": "https://github.com/peejerator/NuvioMobile-IPA",
-  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.3/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.4/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
   "tintColor": "7B2FF7",
   "news": [],
   "apps": [
@@ -13,10 +13,19 @@
       "developerName": "Nuvio",
       "subtitle": "Watch your library, anywhere",
       "localizedDescription": "Unofficial iOS build generated automatically from the official NuvioMobile source code.",
-      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.3/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.4/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
       "tintColor": "7B2FF7",
       "category": "entertainment",
       "versions": [
+        {
+          "version": "0.4.4",
+          "buildVersion": "108",
+          "date": "2026-08-10T06:52:05Z",
+          "localizedDescription": "acbe6f2 fix(NUVIO-MOBILE-WZ): compact watched persistence to prevent OOM @tapframe  \r\n0fc4616b feat(collections): add TMDB Discover exclusion filters @tapframe  \r\nccc6b87d Fix watched badge memory leak @skoruppa  \r\n0c6c6ed8 Simkl should not provide FullyWatchedSeriesKeys @skoruppa  \r\nf2c9b9f9 feat: add binge group fallback toggle for manual mode auto-play @skoruppa  \r\n\r\n",
+          "downloadURL": "https://github.com/peejerator/NuvioMobile-IPA/releases/download/0.4.4/Nuvio-0.4.4.ipa",
+          "size": 43100411,
+          "minOSVersion": "16.1"
+        },
         {
           "version": "0.4.3",
           "buildVersion": "107",
