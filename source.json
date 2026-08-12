@@ -3,7 +3,7 @@
   "subtitle": "Automatic iOS builds of Nuvio",
   "description": "Unofficial SideStore source containing iOS builds created automatically from official Nuvio releases.",
   "website": "https://github.com/peejerator/NuvioMobile-IPA",
-  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.4/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.5/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
   "tintColor": "7B2FF7",
   "news": [],
   "apps": [
@@ -13,10 +13,19 @@
       "developerName": "Nuvio",
       "subtitle": "Watch your library, anywhere",
       "localizedDescription": "Unofficial iOS build generated automatically from the official NuvioMobile source code.",
-      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.4/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.5/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
       "tintColor": "7B2FF7",
       "category": "entertainment",
       "versions": [
+        {
+          "version": "0.4.5",
+          "buildVersion": "109",
+          "date": "2026-08-12T19:42:26Z",
+          "localizedDescription": "c861a8ff fix: balance episode progress spacing @tapframe  \r\n981b8bc7 fix: honor addon cache control @tapframe  \r\nd50f84fc fix(ios): allow smaller subtitle sizes @tapframe  \r\n55307c43 fix: control disintegrate animation @tapframe  \r\n",
+          "downloadURL": "https://github.com/peejerator/NuvioMobile-IPA/releases/download/0.4.5/Nuvio-0.4.5.ipa",
+          "size": 43102307,
+          "minOSVersion": "16.1"
+        },
         {
           "version": "0.4.4",
           "buildVersion": "108",
