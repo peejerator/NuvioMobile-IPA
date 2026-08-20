@@ -3,7 +3,7 @@
   "subtitle": "Automatic iOS builds of Nuvio",
   "description": "Unofficial SideStore source containing iOS builds created automatically from official Nuvio releases.",
   "website": "https://github.com/peejerator/NuvioMobile-IPA",
-  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.6/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.7/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
   "tintColor": "7B2FF7",
   "news": [],
   "apps": [
@@ -11,12 +11,21 @@
       "name": "Nuvio",
       "bundleIdentifier": "com.nuvio.media",
       "developerName": "Nuvio",
-      "subtitle": "Watch your library, anywhere",
+      "subtitle": "Full iOS build",
       "localizedDescription": "Unofficial iOS build generated automatically from the official NuvioMobile source code.",
-      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.6/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.7/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
       "tintColor": "7B2FF7",
       "category": "entertainment",
       "versions": [
+        {
+          "version": "0.4.7",
+          "buildVersion": "111",
+          "date": "2026-08-20T03:26:28Z",
+          "localizedDescription": "bd88760e feat: v1 for supporter perks @tapframe  \r\n9d344ce0 Align SDH filtering with MPV @haaihond  \r\n89527ebb Harden SDH subtitle filtering @haaihond  \r\n1397cb6b Clean up SDH subtitle stripping changes @haaihond  \r\n87585259 Add SDH subtitle stripping @haaihond  \r\n",
+          "downloadURL": "https://github.com/peejerator/NuvioMobile-IPA/releases/download/0.4.7/Nuvio-0.4.7-Full.ipa",
+          "size": 48897493,
+          "minOSVersion": "16.1"
+        },
         {
           "version": "0.4.6",
           "buildVersion": "110",
