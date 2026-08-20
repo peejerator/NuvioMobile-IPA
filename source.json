@@ -23,7 +23,7 @@
           "date": "2026-08-20T03:26:28Z",
           "localizedDescription": "bd88760e feat: v1 for supporter perks @tapframe  \r\n9d344ce0 Align SDH filtering with MPV @haaihond  \r\n89527ebb Harden SDH subtitle filtering @haaihond  \r\n1397cb6b Clean up SDH subtitle stripping changes @haaihond  \r\n87585259 Add SDH subtitle stripping @haaihond  \r\n",
           "downloadURL": "https://github.com/peejerator/NuvioMobile-IPA/releases/download/0.4.7/Nuvio-0.4.7-Full.ipa",
-          "size": 48897493,
+          "size": 48898315,
           "minOSVersion": "16.1"
         },
         {
