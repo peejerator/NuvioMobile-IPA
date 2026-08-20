@@ -162,7 +162,7 @@ jobs:
 
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -1902,7 +1902,7 @@ jobs:
       # ----------------------------------------------------------------
 
       - name: Cache Gradle
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
@@ -1917,7 +1917,7 @@ jobs:
 
 
       - name: Cache Kotlin Native
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.konan
 
@@ -2256,43 +2256,43 @@ jobs:
           IS_PRERELEASE: ${{ needs.check-release.outputs.prerelease }}
         run: |
           set -euo pipefail
-
+      
           IPA="${{ steps.package.outputs.ipa }}"
-
+      
           if gh release view "$NUVIO_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               >/dev/null 2>&1
           then
             echo "Removing existing release $NUVIO_TAG..."
-
+      
             gh release delete "$NUVIO_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --yes
           fi
-
+      
+          UPSTREAM_CHANGELOG="$(
+            gh api \
+              "repos/NuvioMedia/NuvioMobile/releases/tags/$NUVIO_TAG" \
+              --jq '.body // "No upstream changelog provided."'
+          )"
+      
           NOTES="$(cat <<EOF
           Unofficial Full iOS build of Nuvio ${NUVIO_TAG}.
-
-          Upstream:
+      
+          ## Upstream
+      
           ${UPSTREAM_URL}
-
-          Built automatically from the official
-          NuvioMedia/NuvioMobile ${NUVIO_TAG} source.
-
-          Distribution:
-          Full
-
-          Includes the Full/plugin-capable iOS source sets and Nuvio
-          Engine Apple XCFramework.
-
-          Runtime configuration is generated automatically from upstream
-          defaults plus values recovered from the matching official Full
-          Android APK.
-
-          This IPA is unsigned and intended for SideStore or Sideloadly.
+      
+          ## Upstream Changelog
+      
+          ${UPSTREAM_CHANGELOG}
+      
+          ---
+      
+          This IPA is unsigned and intended for use with SideStore, Sideloadly, or other compatible sideloading methods.
           EOF
           )"
-
+      
           if [ "$IS_PRERELEASE" = "true" ]; then
             gh release create "$NUVIO_TAG" \
               "$IPA#Nuvio-${NUVIO_TAG}-Full.ipa" \
@@ -2335,7 +2335,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
