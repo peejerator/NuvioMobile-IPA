@@ -24,9 +24,10 @@ concurrency:
   group: nuvio-ios-builder
   cancel-in-progress: false
 
+
 jobs:
   # ====================================================================
-  # CHECK UPSTREAM RELEASE
+  # CHECK UPSTREAM
   # ====================================================================
 
   check-release:
@@ -103,8 +104,9 @@ jobs:
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
+
   # ====================================================================
-  # BUILD FULL IPA
+  # BUILD FULL IOS
   # ====================================================================
 
   build:
@@ -119,11 +121,7 @@ jobs:
 
     env:
       NUVIO_TAG: ${{ needs.check-release.outputs.tag }}
-
-      # Full/plugin distribution.
       NUVIO_IOS_DISTRIBUTION: full
-
-      # Current public Apple engine release used by the Full build path.
       NUVIO_ENGINE_VERSION: "0.1.1"
 
     steps:
@@ -159,8 +157,9 @@ jobs:
           echo "$NUVIO_IOS_DISTRIBUTION"
 
           echo
-          echo "Nuvio Engine version:"
+          echo "Engine version:"
           echo "$NUVIO_ENGINE_VERSION"
+
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -168,8 +167,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+
       # ----------------------------------------------------------------
-      # Clone exact Nuvio release.
+      # Clone Nuvio
       # ----------------------------------------------------------------
 
       - name: Clone official Nuvio release
@@ -198,26 +198,35 @@ jobs:
           echo "MPVKit commit:"
           git -C MPVKit rev-parse HEAD
 
+
       # ----------------------------------------------------------------
-      # Install the Apple Nuvio Engine required by iosFull.
+      # Nuvio Engine
       #
-      # Nuvio expects the sibling path:
+      # IMPORTANT:
       #
-      # ../nuvio-engine/platform/apple/NuvioEngine.xcframework
+      # This step runs from the repository root.
+      #
+      # Therefore the engine MUST be installed at:
+      #
+      #   ./nuvio-engine/platform/apple/...
+      #
+      # Then, from ./upstream, Gradle sees it as:
+      #
+      #   ../nuvio-engine/platform/apple/...
       # ----------------------------------------------------------------
 
       - name: Download Nuvio Engine XCFramework
         run: |
           set -euo pipefail
 
-          ENGINE_ROOT="../nuvio-engine/platform/apple"
+          ENGINE_ROOT="nuvio-engine/platform/apple"
           ENGINE_DEST="${ENGINE_ROOT}/NuvioEngine.xcframework"
 
           ARCHIVE="$RUNNER_TEMP/nuvio-engine-apple-${NUVIO_ENGINE_VERSION}.zip"
           EXTRACT_DIR="$RUNNER_TEMP/nuvio-engine-${NUVIO_ENGINE_VERSION}"
 
           rm -rf \
-            "$ENGINE_ROOT" \
+            "nuvio-engine" \
             "$EXTRACT_DIR" \
             "$ARCHIVE"
 
@@ -239,7 +248,7 @@ jobs:
             --output "$ARCHIVE"
 
           echo
-          echo "Archive:"
+          echo "Downloaded archive:"
           ls -lh "$ARCHIVE"
 
           ditto \
@@ -247,6 +256,12 @@ jobs:
             -k \
             "$ARCHIVE" \
             "$EXTRACT_DIR"
+
+          echo
+          echo "Extracted contents:"
+          find "$EXTRACT_DIR" \
+            -maxdepth 5 \
+            -print
 
           XCFRAMEWORK="$(
             find "$EXTRACT_DIR" \
@@ -258,12 +273,7 @@ jobs:
 
           if [ -z "$XCFRAMEWORK" ]; then
             echo
-            echo "::error::NuvioEngine.xcframework not found."
-
-            find "$EXTRACT_DIR" \
-              -maxdepth 6 \
-              -print
-
+            echo "::error::NuvioEngine.xcframework was not found in archive."
             exit 1
           fi
 
@@ -272,27 +282,42 @@ jobs:
             "$ENGINE_DEST"
 
           echo
-          echo "Installed:"
+          echo "Installed engine:"
           echo "$ENGINE_DEST"
 
-      - name: Validate Nuvio Engine
+          test -d "$ENGINE_DEST"
+
+
+      - name: Validate Nuvio Engine paths
         run: |
           set -euo pipefail
 
-          ENGINE="../nuvio-engine/platform/apple/NuvioEngine.xcframework"
+          ROOT_ENGINE="nuvio-engine/platform/apple/NuvioEngine.xcframework"
+          UPSTREAM_ENGINE="upstream/../nuvio-engine/platform/apple/NuvioEngine.xcframework"
 
-          if [ ! -d "$ENGINE" ]; then
-            echo "::error::NuvioEngine.xcframework is missing."
+          echo "Repository root:"
+          pwd
+
+          echo
+          echo "Engine from repository root:"
+          echo "$ROOT_ENGINE"
+
+          if [ ! -d "$ROOT_ENGINE" ]; then
+            echo "::error::Engine is missing at repository-root path."
             exit 1
           fi
 
-          echo "XCFramework contents:"
-          find "$ENGINE" \
-            -maxdepth 4 \
-            -print
+          echo
+          echo "Engine as seen from upstream:"
+          echo "$UPSTREAM_ENGINE"
+
+          if [ ! -d "$UPSTREAM_ENGINE" ]; then
+            echo "::error::Engine is not visible from upstream."
+            exit 1
+          fi
 
           DEVICE_LIB="$(
-            find "$ENGINE" \
+            find "$ROOT_ENGINE" \
               -path '*ios-arm64*' \
               -name 'libCNuvioEngine.a' \
               -print \
@@ -300,20 +325,18 @@ jobs:
           )"
 
           if [ -z "$DEVICE_LIB" ]; then
-            echo
             echo "::error::Device libCNuvioEngine.a not found."
             exit 1
           fi
 
           HEADER="$(
-            find "$ENGINE" \
+            find "$ROOT_ENGINE" \
               -name 'nuvio_engine.h' \
               -print \
               -quit
           )"
 
           if [ -z "$HEADER" ]; then
-            echo
             echo "::error::nuvio_engine.h not found."
             exit 1
           fi
@@ -327,27 +350,17 @@ jobs:
           echo "$HEADER"
 
           echo
+          echo "Engine tree:"
+          find "$ROOT_ENGINE" \
+            -maxdepth 4 \
+            -print
+
+          echo
           echo "Nuvio Engine validation passed."
 
+
       # ----------------------------------------------------------------
-      # Discover configuration schema AND source defaults.
-      #
-      # This is the important change for SUPPORTERS_WALL_URL and future
-      # similar properties.
-      #
-      # Instead of saving only:
-      #
-      #   ["KEY_A", "KEY_B"]
-      #
-      # we save:
-      #
-      #   {
-      #     "KEY_A": {"default": ""},
-      #     "KEY_B": {"default": "https://..."}
-      #   }
-      #
-      # Any nonempty upstream default becomes authoritative and does not
-      # require APK reverse engineering.
+      # Discover runtime schema + defaults
       # ----------------------------------------------------------------
 
       - name: Discover runtime configuration schema
@@ -374,12 +387,6 @@ jobs:
           )
 
           config = {}
-
-          # ------------------------------------------------------------
-          # props.getProperty("KEY", "default")
-          #
-          # Handles whitespace/newlines between arguments.
-          # ------------------------------------------------------------
 
           prop_pattern = re.compile(
               r'props\.getProperty\('
@@ -412,10 +419,6 @@ jobs:
                   "default": default,
                   "source": "props.getProperty"
               }
-
-          # ------------------------------------------------------------
-          # runtimeConfigValue("KEY", "default")
-          # ------------------------------------------------------------
 
           runtime_pattern = re.compile(
               r'runtimeConfigValue\('
@@ -473,11 +476,9 @@ jobs:
                   None
               )
 
-          path = Path(
+          Path(
               "../expected-runtime-config.json"
-          )
-
-          path.write_text(
+          ).write_text(
               json.dumps(
                   config,
                   indent=2,
@@ -510,8 +511,9 @@ jobs:
                   )
           PY
 
+
       # ----------------------------------------------------------------
-      # Download matching Full Android APK.
+      # Download Full APK
       # ----------------------------------------------------------------
 
       - name: Download official Full APK
@@ -562,7 +564,6 @@ jobs:
           if [ -z "$APK_NAME" ] ||
              [ "$APK_NAME" = "null" ]; then
 
-            echo
             echo "No Full APK found for $NUVIO_TAG."
             exit 1
           fi
@@ -580,11 +581,11 @@ jobs:
 
           test -f "$APK_PATH"
 
-          echo
           ls -lh "$APK_PATH"
 
           echo "OFFICIAL_APK=$APK_PATH" \
             >> "$GITHUB_ENV"
+
 
       # ----------------------------------------------------------------
       # JADX
@@ -649,6 +650,7 @@ jobs:
           echo "JADX_BIN=$JADX_DIR/bin/jadx" \
             >> "$GITHUB_ENV"
 
+
       - name: Decompile official APK
         run: |
           set -u
@@ -707,8 +709,9 @@ jobs:
           echo "JADX_OUTPUT=$OUTPUT" \
             >> "$GITHUB_ENV"
 
+
       # ----------------------------------------------------------------
-      # Extract raw DEX string pool.
+      # Extract DEX strings
       # ----------------------------------------------------------------
 
       - name: Extract DEX strings
@@ -776,9 +779,7 @@ jobs:
                       position
                   )
 
-                  raw = data[
-                      position:end
-                  ]
+                  raw = data[position:end]
 
                   try:
                       value = raw.decode(
@@ -841,14 +842,9 @@ jobs:
           )
           PY
 
+
       # ----------------------------------------------------------------
-      # Recover runtime configuration.
-      #
-      # ORDER:
-      #
-      # 1. Start with nonempty upstream defaults.
-      # 2. Reverse-engineer only keys still unresolved.
-      # 3. Validate every key.
+      # Runtime config
       # ----------------------------------------------------------------
 
       - name: Recover runtime configuration
@@ -929,12 +925,34 @@ jobs:
           recovered = {}
           evidence = {}
 
-          # ============================================================
-          # Helpers
-          # ============================================================
+          # ------------------------------------------------------------
+          # Only genuinely credential-like values should be masked.
+          #
+          # DO NOT mask "nuvio", URLs, or redirect URIs.
+          #
+          # Masking "nuvio" causes GitHub to display paths like:
+          #
+          #   ***-engine
+          # ------------------------------------------------------------
 
-          def mask(value):
-              if value:
+          SENSITIVE_KEYS = {
+              "NUVIO_SUPABASE_ANON_KEY",
+              "TRAKT_CLIENT_ID",
+              "TRAKT_CLIENT_SECRET",
+              "SIMKL_CLIENT_ID",
+              "PREMIUMIZE_CLIENT_ID",
+              "SENTRY_DSN",
+          }
+
+          def mask_if_sensitive(
+              key,
+              value
+          ):
+              if (
+                  key in SENSITIVE_KEYS
+                  and
+                  value
+              ):
                   print(
                       f"::add-mask::{value}"
                   )
@@ -956,7 +974,10 @@ jobs:
               recovered[key] = value
               evidence[key] = reason
 
-              mask(value)
+              mask_if_sensitive(
+                  key,
+                  value
+              )
 
           def first_dex(predicate):
               for value in dex_strings:
@@ -1091,9 +1112,9 @@ jobs:
 
               return result
 
-          # ============================================================
-          # 1. Use upstream source defaults first.
-          # ============================================================
+          # ------------------------------------------------------------
+          # Source defaults first
+          # ------------------------------------------------------------
 
           for key in expected:
               default = schema[
@@ -1110,9 +1131,9 @@ jobs:
                       "upstream source default"
                   )
 
-          # ============================================================
-          # 2. Nuvio / Supabase
-          # ============================================================
+          # ------------------------------------------------------------
+          # Supabase
+          # ------------------------------------------------------------
 
           put(
               "NUVIO_SUPABASE_URL",
@@ -1136,9 +1157,9 @@ jobs:
               "matched client JWT"
           )
 
-          # ============================================================
+          # ------------------------------------------------------------
           # Sentry
-          # ============================================================
+          # ------------------------------------------------------------
 
           put(
               "SENTRY_DSN",
@@ -1157,9 +1178,9 @@ jobs:
               "matched Sentry DSN"
           )
 
-          # ============================================================
+          # ------------------------------------------------------------
           # Trakt
-          # ============================================================
+          # ------------------------------------------------------------
 
           trakt_redirect = first_dex(
               lambda value:
@@ -1329,9 +1350,9 @@ jobs:
               "Trakt token credential"
           )
 
-          # ============================================================
+          # ------------------------------------------------------------
           # Simkl
-          # ============================================================
+          # ------------------------------------------------------------
 
           simkl_redirect = first_dex(
               lambda value:
@@ -1408,9 +1429,9 @@ jobs:
               "Simkl OAuth credential"
           )
 
-          # ============================================================
+          # ------------------------------------------------------------
           # Premiumize
-          # ============================================================
+          # ------------------------------------------------------------
 
           premiumize_candidates = (
               nearby_candidates(
@@ -1462,11 +1483,9 @@ jobs:
               "Premiumize client ID"
           )
 
-          # ============================================================
-          # Known service URLs.
-          #
-          # Source defaults already won if they existed.
-          # ============================================================
+          # ------------------------------------------------------------
+          # Known URLs
+          # ------------------------------------------------------------
 
           put(
               "INTRODB_API_URL",
@@ -1522,22 +1541,9 @@ jobs:
               "matched donation page"
           )
 
-          # ============================================================
-          # Generic URL resolver.
-          #
-          # If a future unresolved key clearly ends with URL and the
-          # source/default name gives us a unique matching URL in the APK,
-          # recover it automatically.
-          #
-          # Example:
-          #   SUPPORTERS_WALL_URL
-          #
-          # We look for URLs containing meaningful key words:
-          #   supporters
-          #   wall
-          #
-          # and only accept a unique candidate.
-          # ============================================================
+          # ------------------------------------------------------------
+          # Generic URL resolver for future URL properties
+          # ------------------------------------------------------------
 
           for key in expected:
               if recovered.get(key):
@@ -1618,9 +1624,9 @@ jobs:
                           "unique generic URL mapping"
                       )
 
-          # ============================================================
-          # Final validation.
-          # ============================================================
+          # ------------------------------------------------------------
+          # Final validation
+          # ------------------------------------------------------------
 
           missing = [
               key
@@ -1687,12 +1693,6 @@ jobs:
                   "=============================================="
               )
 
-              print()
-              print(
-                  "The following properties could "
-                  "not be resolved:"
-              )
-
               for key in missing:
                   print(
                       f"  - {key}"
@@ -1705,9 +1705,9 @@ jobs:
 
               raise SystemExit(1)
 
-          # ============================================================
-          # Generate local.properties.
-          # ============================================================
+          # ------------------------------------------------------------
+          # Write local.properties
+          # ------------------------------------------------------------
 
           def escape(value):
               return (
@@ -1736,8 +1736,8 @@ jobs:
           ) as file:
 
               file.write(
-                  "# Generated automatically from upstream "
-                  "defaults and the matching Full APK.\n"
+                  "# Generated automatically from "
+                  "upstream defaults and Full APK.\n"
               )
 
               file.write(
@@ -1771,8 +1771,9 @@ jobs:
           )
           PY
 
+
       # ----------------------------------------------------------------
-      # Validate generated config.
+      # Validate runtime config
       # ----------------------------------------------------------------
 
       - name: Validate generated local.properties
@@ -1860,8 +1861,9 @@ jobs:
           )
           PY
 
+
       # ----------------------------------------------------------------
-      # Validate Full source sets before long compilation.
+      # Validate Full sources
       # ----------------------------------------------------------------
 
       - name: Validate Full source sets
@@ -1894,8 +1896,9 @@ jobs:
             -type f \
             | head -20
 
+
       # ----------------------------------------------------------------
-      # Caches.
+      # Cache
       # ----------------------------------------------------------------
 
       - name: Cache Gradle
@@ -1912,6 +1915,7 @@ jobs:
             gradle-full-${{ runner.os }}-${{ runner.arch }}-
             gradle-${{ runner.os }}-${{ runner.arch }}-
 
+
       - name: Cache Kotlin Native
         uses: actions/cache@v4
         with:
@@ -1923,8 +1927,9 @@ jobs:
             konan-full-${{ runner.os }}-${{ runner.arch }}-
             konan-${{ runner.os }}-${{ runner.arch }}-
 
+
       # ----------------------------------------------------------------
-      # Memory configuration.
+      # Gradle memory
       # ----------------------------------------------------------------
 
       - name: Configure Gradle memory
@@ -1970,30 +1975,77 @@ jobs:
               >> gradle.properties
           fi
 
+
       - name: Make Gradle wrapper executable
         run: |
           chmod +x upstream/gradlew
+
 
       - name: Verify Gradle
         working-directory: upstream
         run: |
           ./gradlew --version
 
+
       - name: Stop existing Gradle daemons
         working-directory: upstream
         run: |
           ./gradlew --stop || true
 
+
       # ----------------------------------------------------------------
-      # Build the Full DEVICE application.
-      #
-      # The command you found upstream is a Debug simulator smoke-test.
-      # For a sideloadable IPA we need:
-      #
-      # - Full distribution
-      # - Release
-      # - iphoneos
-      # - generic/platform=iOS
+      # Final pre-build path check
+      # ----------------------------------------------------------------
+
+      - name: Verify engine from upstream working directory
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+
+          ENGINE="../nuvio-engine/platform/apple/NuvioEngine.xcframework"
+
+          echo "Current directory:"
+          pwd
+
+          echo
+          echo "Expected engine:"
+          echo "$ENGINE"
+
+          if [ ! -d "$ENGINE" ]; then
+            echo
+            echo "::error::Nuvio Engine is not visible from upstream."
+            echo
+            echo "Parent directory contents:"
+            find .. \
+              -maxdepth 4 \
+              -print
+
+            exit 1
+          fi
+
+          echo
+          echo "Engine libraries:"
+
+          find "$ENGINE" \
+            -name 'libCNuvioEngine.a' \
+            -print
+
+          if ! find "$ENGINE" \
+              -name 'libCNuvioEngine.a' \
+              -print \
+              -quit \
+              | grep -q .
+          then
+            echo "::error::libCNuvioEngine.a is missing."
+            exit 1
+          fi
+
+          echo
+          echo "Engine is correctly installed relative to upstream."
+
+
+      # ----------------------------------------------------------------
+      # Full physical-device build
       # ----------------------------------------------------------------
 
       - name: Build Full unsigned iOS app
@@ -2025,6 +2077,7 @@ jobs:
 
           echo
           echo "Engine libraries:"
+
           find \
             ../nuvio-engine/platform/apple/NuvioEngine.xcframework \
             -name 'libCNuvioEngine.a' \
@@ -2055,7 +2108,6 @@ jobs:
             echo "=============================================="
             echo "FULL IOS BUILD FAILED"
             echo "=============================================="
-
             echo
 
             grep -n -E \
@@ -2075,14 +2127,16 @@ jobs:
             exit "$BUILD_STATUS"
           fi
 
+
       - name: Stop Gradle daemon
         if: always()
         working-directory: upstream
         run: |
           ./gradlew --stop || true
 
+
       # ----------------------------------------------------------------
-      # Package Full IPA.
+      # Package
       # ----------------------------------------------------------------
 
       - name: Locate built app
@@ -2110,6 +2164,7 @@ jobs:
 
           echo "app_path=$APP_PATH" \
             >> "$GITHUB_OUTPUT"
+
 
       - name: Inspect app metadata
         run: |
@@ -2141,6 +2196,7 @@ jobs:
             -c "Print :MinimumOSVersion" \
             "$PLIST" ||
             true
+
 
       - name: Package Full IPA
         id: package
@@ -2176,6 +2232,7 @@ jobs:
           echo "ipa=$IPA" \
             >> "$GITHUB_OUTPUT"
 
+
       - name: Validate IPA
         run: |
           set -euo pipefail
@@ -2187,8 +2244,9 @@ jobs:
           echo
           ls -lh "$IPA"
 
+
       # ----------------------------------------------------------------
-      # Publish.
+      # Release
       # ----------------------------------------------------------------
 
       - name: Publish GitHub release
@@ -2224,15 +2282,12 @@ jobs:
           Distribution:
           Full
 
-          The Full build uses Nuvio's iosFull/fullCommon source sets and
-          Nuvio Engine Apple XCFramework.
+          Includes the Full/plugin-capable iOS source sets and Nuvio
+          Engine Apple XCFramework.
 
           Runtime configuration is generated automatically from upstream
-          source defaults plus values recovered from the matching official
-          Full Android APK.
-
-          The workflow stops before compilation if required configuration
-          cannot be resolved.
+          defaults plus values recovered from the matching official Full
+          Android APK.
 
           This IPA is unsigned and intended for SideStore or Sideloadly.
           EOF
@@ -2253,8 +2308,9 @@ jobs:
               --notes "$NOTES"
           fi
 
+
   # ====================================================================
-  # SIDESTORE SOURCE
+  # SIDESTORE
   # ====================================================================
 
   update-source:
@@ -2283,6 +2339,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+
 
       - name: Download Full IPA
         env:
@@ -2313,6 +2370,7 @@ jobs:
 
           echo "IPA_PATH=$IPA" \
             >> "$GITHUB_ENV"
+
 
       - name: Extract IPA metadata
         id: metadata
@@ -2399,6 +2457,7 @@ jobs:
                   )
           PY
 
+
       - name: Get upstream release info
         env:
           GH_TOKEN: ${{ github.token }}
@@ -2408,6 +2467,7 @@ jobs:
           gh api \
             "repos/NuvioMedia/NuvioMobile/releases/tags/$NUVIO_TAG" \
             > "$RUNNER_TEMP/upstream-release.json"
+
 
       - name: Update source.json
         env:
@@ -2633,6 +2693,7 @@ jobs:
           )
           PY
 
+
       - name: Validate source.json
         run: |
           set -euo pipefail
@@ -2649,6 +2710,7 @@ jobs:
             '.apps[0].versions[] |
             "\(.version) (\(.buildVersion)) -> \(.downloadURL)"' \
             source.json
+
 
       - name: Commit source.json
         run: |
@@ -2686,6 +2748,7 @@ jobs:
           git push \
             origin \
             main
+
 
       - name: Show SideStore source URL
         run: |
