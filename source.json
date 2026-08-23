@@ -3,7 +3,7 @@
   "subtitle": "Automatic iOS builds of Nuvio",
   "description": "Unofficial SideStore source containing iOS builds created automatically from official Nuvio releases.",
   "website": "https://github.com/peejerator/NuvioMobile-IPA",
-  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.7/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.8/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
   "tintColor": "7B2FF7",
   "news": [],
   "apps": [
@@ -13,10 +13,19 @@
       "developerName": "Nuvio",
       "subtitle": "Full iOS build",
       "localizedDescription": "Unofficial iOS build generated automatically from the official NuvioMobile source code.",
-      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.7/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.8/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
       "tintColor": "7B2FF7",
       "category": "entertainment",
       "versions": [
+        {
+          "version": "0.4.8",
+          "buildVersion": "112",
+          "date": "2026-08-23T07:15:24Z",
+          "localizedDescription": "  c4934bce fix(player): refresh pause description between episodes @tapframe  \r\n3e9ffad0 fix(ui): blur episode thumbnails consistently @tapframe  \r\n1a4ed637 fix(profiles): show add profile only in edit mode @tapframe  \r\nb80ee5ab fix(profiles): use profile background on mobile loading screen @tapframe  \r\n54aa75ea Fix anime movies for Simkl @skoruppa  \r\nfaae0cd7 feat(addons): confirm addon and download deletions @tapframe  \r\n6df97f91 Update support strings.xml @viiktr  \r\n0cc5da0d Update strings.xml @viiktr  \r\n",
+          "downloadURL": "https://github.com/peejerator/NuvioMobile-IPA/releases/download/0.4.8/Nuvio-0.4.8-Full.ipa",
+          "size": 48981985,
+          "minOSVersion": "16.1"
+        },
         {
           "version": "0.4.7",
           "buildVersion": "111",
