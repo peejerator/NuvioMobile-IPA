@@ -3,7 +3,7 @@
   "subtitle": "Automatic iOS builds of Nuvio",
   "description": "Unofficial SideStore source containing iOS builds created automatically from official Nuvio releases.",
   "website": "https://github.com/peejerator/NuvioMobile-IPA",
-  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.8/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.10/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
   "tintColor": "7B2FF7",
   "news": [],
   "apps": [
@@ -13,10 +13,19 @@
       "developerName": "Nuvio",
       "subtitle": "Full iOS build",
       "localizedDescription": "Unofficial iOS build generated automatically from the official NuvioMobile source code.",
-      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.8/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.10/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
       "tintColor": "7B2FF7",
       "category": "entertainment",
       "versions": [
+        {
+          "version": "0.4.10",
+          "buildVersion": "114",
+          "date": "2026-08-24T06:16:34Z",
+          "localizedDescription": "c2df2c11 fix(search): preserve state across tab changes @tapframe  \r\n15df9555 Last fixes for anime movies in SImkl @skoruppa  \r\n",
+          "downloadURL": "https://github.com/peejerator/NuvioMobile-IPA/releases/download/0.4.10/Nuvio-0.4.10-Full.ipa",
+          "size": 49046314,
+          "minOSVersion": "16.1"
+        },
         {
           "version": "0.4.8",
           "buildVersion": "112",
