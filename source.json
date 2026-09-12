@@ -3,7 +3,7 @@
   "subtitle": "Automatic iOS builds of Nuvio",
   "description": "Unofficial SideStore source containing iOS builds created automatically from official Nuvio releases.",
   "website": "https://github.com/NuvioMedia/NuvioMobile",
-  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.16/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.17/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
   "tintColor": "7B2FF7",
   "news": [],
   "apps": [
@@ -13,10 +13,20 @@
       "developerName": "Nuvio",
       "subtitle": "Full iOS build",
       "localizedDescription": "Unofficial iOS build generated automatically from the official NuvioMobile source code.",
-      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.16/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.17/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
       "tintColor": "7B2FF7",
       "category": "entertainment",
       "versions": [
+        {
+          "version": "0.4.17",
+          "buildVersion": "122",
+          "date": "2026-09-12T01:48:34Z",
+          "localizedDescription": "- 2d03b258 fix(plugins): restore iOS runtime compilation @tapframe  \n- d23b3c04 fix(player): disable binge group reuse by default @tapframe  \n- [perf(plugins): pause search during playback and match TV runtime (#1917)](https://github.com/NuvioMedia/NuvioMobile/pull/1917) @halibiram  \n- 1854dfc3 fix(sync): prevent automatic pulls from restoring deleted data @tapframe  ",
+          "downloadURL": "https://github.com/NuvioMedia/NuvioMobile/releases/download/0.4.17/nuvio-0.4.17-full-release.ipa",
+          "size": 51022041,
+          "sha256": "3adcd75775637c447f16bf0d76ba51e35bd581e10fb3e99e069841298b51366c",
+          "minOSVersion": "16.1"
+        },
         {
           "version": "0.4.16",
           "buildVersion": "121",
