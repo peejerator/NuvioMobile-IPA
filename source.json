@@ -3,7 +3,7 @@
   "subtitle": "Automatic iOS builds of Nuvio",
   "description": "Unofficial SideStore source containing iOS builds created automatically from official Nuvio releases.",
   "website": "https://github.com/NuvioMedia/NuvioMobile",
-  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.20/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+  "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.21/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
   "tintColor": "7B2FF7",
   "news": [],
   "apps": [
@@ -13,10 +13,20 @@
       "developerName": "Nuvio",
       "subtitle": "Full iOS build",
       "localizedDescription": "Unofficial iOS build generated automatically from the official NuvioMobile source code.",
-      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.20/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
+      "iconURL": "https://raw.githubusercontent.com/NuvioMedia/NuvioMobile/0.4.21/iosApp/iosApp/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png",
       "tintColor": "7B2FF7",
       "category": "entertainment",
       "versions": [
+        {
+          "version": "0.4.21",
+          "buildVersion": "126",
+          "date": "2026-09-15T10:29:28Z",
+          "localizedDescription": "- 24c08216 fix(home): match continue watching badge colors to tv @tapframe  \n- 73005d99 perf(navigation): reduce root tab switch stalls @tapframe  \n- [Add TVDB anime ID preference to avoid per-season IMDB splits (#1952)](https://github.com/NuvioMedia/NuvioMobile/pull/1952) @skoruppa  \n- f6d172ae Revert \"perf(navigation): reduce tab switch animation stalls\" @tapframe  \n- 33edb559 fix(player): keep android landscape lock during exit @tapframe  \n- 6761ebab fix(profiles): add active profile toast and back button @tapframe  \n- 51951059 fix(profiles): prevent selecting the active profile @tapframe  \n- 998a9bfb fix(player): hide addons with no streams @tapframe  \n- [fix(player): start playback without waiting for addon subtitles (#1949)](https://github.com/NuvioMedia/NuvioMobile/pull/1949) @halibiram  \n- 7a0e80b0 fix(trailer): open ios playback in fullscreen @tapframe  \n- [Fix anime skip mapping, subtitle language detection, watched badges and Polish translations (#1943)](https://github.com/NuvioMedia/NuvioMobile/pull/1943) @skoruppa  ",
+          "downloadURL": "https://github.com/NuvioMedia/NuvioMobile/releases/download/0.4.21/nuvio-0.4.21-full-release.ipa",
+          "size": 51231186,
+          "sha256": "118eb04f4a945cf8da9e4bbc03969ee360c0e47b7a62d1ade7967d86ad75870e",
+          "minOSVersion": "16.1"
+        },
         {
           "version": "0.4.20",
           "buildVersion": "125",
